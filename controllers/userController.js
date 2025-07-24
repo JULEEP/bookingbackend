@@ -32,17 +32,18 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'Mobile number not registered' });
     }
 
-    // OTP related code completely remove kar diya gaya hai
+    // OTP related code completely removed
 
     res.status(200).json({
-      message: 'Login successful'
-      // OTP response nahi bheja jaa raha hai ab
+      message: 'Login successful',
+      user: user  // sending user details in response
     });
   } catch (error) {
     console.error('Error during login:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
+
 
 
 
@@ -70,3 +71,23 @@ exports.verifyOTP = async (req, res) => {
   }
 };
 
+
+// controllers/userController.js
+
+exports.updateUserProfile = async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const { city, gender, dob } = req.body;
+
+    const updatedUser = await User.updateUserProfile(userId, city, gender, dob);
+
+    res.status(200).json({
+      success: true,
+      message: "User profile updated successfully",
+      user: updatedUser
+    });
+  } catch (error) {
+    console.error("Error updating user profile:", error);
+    res.status(500).json({ error: "Internal server error" });
+  }
+};

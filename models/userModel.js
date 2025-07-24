@@ -18,3 +18,16 @@ exports.findUserByMobile = async (mobile) => {
   );
   return result.rows[0];
 };
+
+
+exports.updateUserProfile = async (userId, city, gender, dob) => {
+  const result = await pool.query(
+    `UPDATE users 
+     SET city = $1, gender = $2, dob = $3 
+     WHERE id = $4 
+     RETURNING *`,
+    [city, gender, dob, userId]
+  );
+  return result.rows[0]; // ✅ This returns updated user data
+};
+
