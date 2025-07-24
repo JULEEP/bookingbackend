@@ -15,7 +15,8 @@ const createUsersTable = `
     name VARCHAR(100),
     email VARCHAR(100) UNIQUE,
     mobile VARCHAR(15),
-    password TEXT NOT NULL
+    password TEXT NOT NULL,
+    otp VARCHAR(6) -- Adding the otp column here
   );
 `;
 
