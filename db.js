@@ -2,11 +2,11 @@ const { Pool } = require('pg');
 require('dotenv').config();
 
 const pool = new Pool({
-  user: process.env.DB_USER,
-  host: process.env.DB_HOST,
-  database: process.env.DB_NAME,
-  password: process.env.DB_PASSWORD,
-  port: process.env.DB_PORT,
+  user: process.env.DB_USER,        // User for DB connection
+  host: process.env.DB_HOST,        // Host for DB connection (like `localhost` or remote host)
+  database: process.env.DB_NAME,    // Database name
+  password: process.env.DB_PASSWORD, // Password for the DB user
+  port: process.env.DB_PORT,        // Port (default is 5432 for PostgreSQL)
 });
 
 const createUsersTable = `
@@ -16,7 +16,6 @@ const createUsersTable = `
     email VARCHAR(100) UNIQUE,
     mobile VARCHAR(15),
     password TEXT NOT NULL,
-    otp VARCHAR(6) -- Adding the otp column here
   );
 `;
 

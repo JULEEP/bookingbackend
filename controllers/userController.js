@@ -20,9 +20,7 @@ exports.register = async (req, res) => {
 
 
 // 4-digit OTP generator
-const generateOTP = () => {
-  return Math.floor(1000 + Math.random() * 9000);
-};
+
 
 exports.login = async (req, res) => {
   try {
@@ -34,14 +32,11 @@ exports.login = async (req, res) => {
       return res.status(401).json({ error: 'Mobile number not registered' });
     }
 
-    const otp = generateOTP();
-
-    // OTP ko DB me update kar rahe hain
-    await User.updateUserOTP(mobile, otp);
+    // OTP related code completely remove kar diya gaya hai
 
     res.status(200).json({
-      message: 'Login successful, OTP sent',
-      otp: otp // Production me mat bhejna response me!
+      message: 'Login successful'
+      // OTP response nahi bheja jaa raha hai ab
     });
   } catch (error) {
     console.error('Error during login:', error);

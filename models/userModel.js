@@ -18,21 +18,3 @@ exports.findUserByMobile = async (mobile) => {
   );
   return result.rows[0];
 };
-
-exports.updateUserOTP = async (mobile, otp) => {
-  const result = await pool.query(
-    'UPDATE users SET otp = $1 WHERE mobile = $2 RETURNING *',
-    [otp, mobile]
-  );
-  return result.rows[0];
-};
-
-
-
-exports.findUserByOTP = async (otp) => {
-  const result = await pool.query(
-    'SELECT * FROM users WHERE otp = $1',
-    [otp]
-  );
-  return result.rows[0];
-};
