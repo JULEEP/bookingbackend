@@ -1,17 +1,17 @@
-const multer = require('multer');
-const path = require('path');
+import multer from 'multer';
+import path from 'path';
 
-// Storage config
+// Storage configuration
 const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    cb(null, 'uploads/categoryImg'); 
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/categoryImg');
   },
-  filename: function (req, file, cb) {
+  filename: (req, file, cb) => {
     cb(null, Date.now() + path.extname(file.originalname));
   }
 });
 
-// File filter
+// File filter to allow only images
 const fileFilter = (req, file, cb) => {
   const allowedTypes = /jpeg|jpg|png|gif/;
   const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
@@ -24,18 +24,254 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-const uploadCategoryImage = multer({
+// Multer upload instance with size limit 2MB
+export const uploadCategoryImage = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 2 * 1024 * 1024 }
+  limits: { fileSize: 2 * 1024 * 1024 } // 2 MB
 });
 
-// Agar future mein koi aur multer config ya helper add karni ho to
-// yahan add kar sakte ho:
+// Future multer configs can go here:
+// export const uploadOtherImages = multer({...});
 
-// const uploadOtherImages = multer({...});
 
-module.exports = {
-  uploadCategoryImage,
-  // uploadOtherImages,
+// Storage configuration for tournament images
+const storageTournament = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/tournamentImg');
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  }
+});
+
+// File filter (images only)
+const fileFilterTournament = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only image files are allowed!'));
+  }
 };
+
+// Multer upload instance for tournament images with 2MB limit
+export const uploadTournamentImage = multer({
+  storage: storageTournament,
+  fileFilter: fileFilterTournament,
+  limits: { fileSize: 2 * 1024 * 1024 } // 2 MB
+});
+
+
+
+const storageTurf = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/turfImg');
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + "-" + file.originalname);
+  }
+});
+
+const fileFilterTurf = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only image files are allowed!'));
+  }
+};
+
+export const uploadTurfImage = multer({
+  storage: storageTurf,
+  fileFilter: fileFilterTurf,
+  limits: { fileSize: 2 * 1024 * 1024 } // 2 MB
+});
+
+
+const storageProfile = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/profileImage'); // folder to save profile images
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+
+const fileFilterProfile = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only image files are allowed!'));
+  }
+};
+
+export const uploadProfileImage = multer({
+  storage: storageProfile,
+  fileFilter: fileFilterProfile,
+  limits: { fileSize: 2 * 1024 * 1024 }, // max 2MB
+});
+
+
+const storageBanner = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/bannersImg');
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+
+const fileFilterBanner = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only image files are allowed!'));
+  }
+};
+
+export const uploadBannerImage = multer({
+  storage: storageBanner,
+  fileFilter: fileFilterBanner,
+  limits: { fileSize: 2 * 1024 * 1024 } // 2 MB
+});
+
+
+// Storage config for Match Image
+const storageMatchImage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, 'uploads/matchImages'); // Save images in this folder
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + '-' + file.originalname);
+  }
+});
+
+// File filter for image validation
+const fileFilterMatchImage = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (mimetype && extname) {
+    cb(null, true);
+  } else {
+    cb(new Error('Only image files (jpg, jpeg, png, gif) are allowed!'));
+  }
+};
+
+// Exported multer middleware for match image upload
+export const uploadMatchImage = multer({
+  storage: storageMatchImage,
+  fileFilter: fileFilterMatchImage,
+  limits: { fileSize: 5 * 1024 * 1024 } // Optional: limit to 5MB
+});
+
+
+// Storage configuration for Ad images
+const storageAd = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/adsImg"); // ✅ Make sure this folder exists
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
+});
+
+// File filter: allow only images
+const fileFilterAd = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (extname && mimetype) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only image files are allowed!"));
+  }
+};
+
+// Export multer instance
+export const uploadAdImage = multer({
+  storage: storageAd,
+  fileFilter: fileFilterAd,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB limit
+});
+
+
+
+// Storage configuration for Coupon images
+const storageCoupon = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/couponImg"); // ✅ Make sure this folder exists
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname));
+  },
+});
+
+// File filter: allow only images
+const fileFilterCoupon = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (extname && mimetype) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only image files are allowed!"));
+  }
+};
+
+// Export multer instance
+export const uploadCouponImage = multer({
+  storage: storageCoupon,
+  fileFilter: fileFilterCoupon,
+  limits: { fileSize: 2 * 1024 * 1024 }, // 2MB limit
+});
+
+
+
+// Storage configuration for product images
+const storageProduct = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/productImg"); // Make sure this folder exists
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname)); // Unique filename using timestamp
+  },
+});
+
+// File filter: allow only images (jpeg, jpg, png, gif)
+const fileFilterProduct = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (extname && mimetype) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only image files are allowed!"));
+  }
+};
+
+// Multer instance for product image uploads
+export const uploadProductImage = multer({
+  storage: storageProduct,
+  fileFilter: fileFilterProduct,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB file size limit
+});

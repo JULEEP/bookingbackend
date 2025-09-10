@@ -1,33 +1,52 @@
-const pool = require('../db');
+import mongoose from 'mongoose';
 
-exports.createUser = async (name, email, mobile, password) => {
-  const result = await pool.query(
-    'INSERT INTO users (name, email, mobile, password) VALUES ($1, $2, $3, $4) RETURNING *',
-    [name, email, mobile, password]
-  );
-  return result.rows[0];
-};
+const userSchema = new mongoose.Schema({
+  name: { type: String },
+  email: { type: String },
+  mobile: { type: String, unique: true },
+  password: { type: String },
+  otp: { type: String, default: null },
+  city: { type: String },
+  gender: { type: String },
+  dob: { type: Date },
+  latitude: { type: Number },
+  longitude: { type: Number },
+  
+  profileImage: {
+    type: String, // store image path or URL here
+    default: '',  // optional default value
+  },
 
+  notifications: [{ type: String }],  // Simple array of string messages
 
+  myTeams: [
+    {
+      teamId: mongoose.Schema.Types.ObjectId,
+      matchId: mongoose.Schema.Types.ObjectId,
+      teamName: String,
+      players: [
+        {
+          name: String,
+          age: Number,
+          position: String,
+          jerseyNumber: Number,
+          height: String,
+          weight: String
+        }
+      ],
+      createdAt: Date
+    }
+  ],
 
+  // ✅ New Role Field
+  role: {
+    type: String,
+    enum: ['Super Admin', 'Admin', 'Ground Admin', 'Turf Admin', 'Match Admin', 'User'],
+    default: 'User'
+  }
 
-exports.findUserByMobile = async (mobile) => {
-  const result = await pool.query(
-    'SELECT * FROM users WHERE mobile = $1',
-    [mobile]
-  );
-  return result.rows[0];
-};
+}, { timestamps: true });
 
+const User = mongoose.model('User', userSchema);
 
-exports.updateUserProfile = async (userId, city, gender, dob) => {
-  const result = await pool.query(
-    `UPDATE users 
-     SET city = $1, gender = $2, dob = $3 
-     WHERE id = $4 
-     RETURNING *`,
-    [city, gender, dob, userId]
-  );
-  return result.rows[0]; // ✅ This returns updated user data
-};
-
+export default User;

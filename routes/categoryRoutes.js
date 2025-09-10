@@ -1,10 +1,17 @@
-const express = require('express');
+import express from 'express';
+import { createCategory, deleteCategory, getAllCategories, updateCategory } from '../controllers/categoryController.js';
+import { uploadCategoryImage } from '../config/multerConfig.js';
+
 const router = express.Router();
-const categoryController = require('../controllers/categoryController');
 
-const { uploadCategoryImage } = require('../config/multerConfig');
+// Route to create a category (with image upload)
+router.post('/create-category', uploadCategoryImage.single('image'), createCategory);
+router.put('/update-category/:id', uploadCategoryImage.single('image'), updateCategory);
+router.delete('/delete-category/:id', deleteCategory);
 
-router.post('/create', uploadCategoryImage.single('image'), categoryController.createCategory);
-router.get('/categories', categoryController.getAllCategories);
 
-module.exports = router;
+
+// Route to get all categories
+router.get('/categories', getAllCategories);
+
+export default router;

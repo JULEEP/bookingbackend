@@ -1,16 +1,21 @@
-const pool = require('../db');
+// models/Category.js
+import mongoose from 'mongoose';
 
-// Category create karne ka function
-exports.createCategory = async (name, image) => {
-  const result = await pool.query(
-    'INSERT INTO categories (name, image) VALUES ($1, $2) RETURNING *',
-    [name, image]
-  );
-  return result.rows[0];
-};
+const categorySchema = new mongoose.Schema(
+  {
+    name: { type: String, },
+    image: { type: String, default: null },
+    
+    // ✅ New Status Field
+    status: {
+      type: String,
+      enum: ['active', 'inactive'],
+      default: 'active'
+    }
+  },
+  { timestamps: true }
+);
 
-// Saari categories fetch karne ka function
-exports.getAllCategories = async () => {
-  const result = await pool.query('SELECT * FROM categories');
-  return result.rows;
-};
+const Category = mongoose.model('Category', categorySchema);
+
+export default Category;
