@@ -16,9 +16,21 @@ import {
   bookTournamentSlot,
   getMyTournamentBookings,
   createTeam,
-  addTeamToBooking
+  createMatch,
+  startMatch,
+  getAllMatches,
+  getSingleMatch,
+  getAllTeams,
+  searchUsers,
+  createTournament,
+  getAllTournaments,
+  addTeamToTournament,
+  getTeamsByTournament,
+  getSingleMatchById,
+  updateLiveScore
 } from '../controllers/userController.js';
 import { uploadProfileImage } from '../config/multerConfig.js';
+import { getTournamentTeams } from '../controllers/turnamentController.js';
 
 const router = express.Router();
 
@@ -45,6 +57,26 @@ router.post('/book-turnament-slot', bookTournamentSlot);
 router.get('/myturfbookings/:userId', getUserTurfBookings);
 router.get('/mytournamentbookings/:userId', getMyTournamentBookings);
 router.get('/mynotifications/:userId', getUserNotifications);
-router.post('/createteam/:matchId', createTeam);
-router.put("/add-team/:userId/:bookingId", addTeamToBooking);
+router.post('/createteams/:userId', createTeam);
+router.get('/allteams', getAllTeams);
+router.post("/creatematch/:userId", createMatch);
+router.get("/tournamentsteams/:tournamentId", getTournamentTeams);
+router.post("/startmatch/:userId/:matchId", startMatch);
+router.get("/getmatches", getAllMatches);
+router.get("/singlematch/:userId/:matchId", getSingleMatch);
+router.get("/searchusers", searchUsers);
+router.post('/createtournaments/:userId', createTournament);
+router.get('/alltournaments', getAllTournaments);
+router.post("/addteamtournaments/:userId", addTeamToTournament);
+router.get('/tournamentsteams/:tournamentId', getTeamsByTournament);
+router.get('/getsinglematch/:id', getSingleMatchById);
+router.put('/updatematch/:id', updateLiveScore);
+
+
+
+
+
+
+
+
 export default router;

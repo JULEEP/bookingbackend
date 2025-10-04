@@ -1,6 +1,6 @@
 import express from "express";
-import { uploadAdImage, uploadBannerImage, uploadCouponImage, uploadMatchImage, uploadProductImage, uploadTurfImage } from "../config/multerConfig.js";
-import { createAd, createCommission, createCoupon, createIntegration, createMatch, createPlan, createProduct, createTurf, deleteAd, deleteBanner, deleteBooking, deleteCommission, deleteCoupon, deleteIntegration, deletePlan, deleteTurf, deleteUserById, getAllAds, getAllBanners, getAllBookingsForAdmin, getAllCommissions, getAllCoupons, getAllIntegrations, getAllMatches, getAllPlans, getAllProducts, getAllTurfs, getAllUsers, getCouponById, getScoreboard, getSingleUser, loginAdmin, registerAdmin, updateAd, updateBall, updateBanner, updateBookingStatus, updateCommission, updateCoupon, updateIntegration, updatePlan, updateTurf, updateUserById, uploadBanners } from "../controllers/adminController.js";
+import { uploadAdImage, uploadBannerImage, uploadCouponImage, uploadMatchImage, uploadNotificationFile, uploadProductImage, uploadTurfImage } from "../config/multerConfig.js";
+import { createAd, createCommission, createCoupon, createIntegration, createMatch, createPlan, createProduct, createTurf, deleteAd, deleteBanner, deleteBooking, deleteCommission, deleteCoupon, deleteIntegration, deleteNotification, deletePlan, deleteTurf, deleteUserById, getAllAds, getAllBanners, getAllBookingsForAdmin, getAllCommissions, getAllCoupons, getAllIntegrations, getAllMatches, getAllNotifications, getAllPlans, getAllProducts, getAllTurfs, getAllUsers, getCouponById, getScoreboard, getSingleUser, loginAdmin, registerAdmin, sendNotification, updateAd, updateBall, updateBanner, updateBookingStatus, updateCommission, updateCoupon, updateIntegration, updateNotification, updatePlan, updateTurf, updateUserById, uploadBanners } from "../controllers/adminController.js";
 
 const router = express.Router();
 
@@ -52,6 +52,11 @@ router.put("/updatecommission/:id", updateCommission);
 router.delete("/deletecommission/:id", deleteCommission);
 router.post('/create-products', uploadProductImage.array('images', 5), createProduct); // Limiting to 5 images
 router.get('/allproducts', getAllProducts);
+router.post("/sendnotification", uploadNotificationFile.single("file"), sendNotification);
+router.get("/getallnotifications", getAllNotifications);
+router.put("/updatenotification/:id", uploadNotificationFile.single("file"), updateNotification);
+router.delete("/deletenotification/:id", deleteNotification);
+
 
 
 

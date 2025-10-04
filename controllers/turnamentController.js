@@ -1,16 +1,26 @@
 import Tournament from "../models/turnamentModel.js";
 import Category from "../models/categoryModel.js"
+import mongoose from "mongoose";
 
 
 
 export const createTournament = async (req, res) => {
   try {
-    const { name, location, price, description, date, time, allowedAge, slots } = req.body;
-    // `slots` should be an array of objects like [{ timeSlot: "9:00 AM - 10:00 AM" }, ...]
+    const {
+      name,
+      location,
+      price,
+      description,
+      date,
+      time,
+      allowedAge,
+      slots,
+      status // optional input
+    } = req.body;
 
     const image = req.file ? req.file.filename : null;
 
-    // Validate slots input if required
+    // Validate and process slots
     let processedSlots = [];
     if (slots && Array.isArray(slots)) {
       processedSlots = slots.map(slot => ({
@@ -30,7 +40,8 @@ export const createTournament = async (req, res) => {
         allowedAge,
         slots: processedSlots
       },
-      image
+      image,
+      status: status || 'enabled' // default to 'enabled' if not provided
     });
 
     await newTournament.save();
@@ -51,7 +62,8 @@ export const createTournament = async (req, res) => {
           slots: newTournament.details.slots
         },
         image: newTournament.image,
-        imageUrl: image ? `/uploads/tournamentImg/${image}` : null
+        imageUrl: image ? `/uploads/tournamentImg/${image}` : null,
+        status: newTournament.status
       }
     });
 
@@ -63,12 +75,24 @@ export const createTournament = async (req, res) => {
 
 
 
+
 export const updateTournament = async (req, res) => {
   try {
-    const { name, location, price, description, date, time, allowedAge, slots } = req.body;
+    const {
+      name,
+      location,
+      price,
+      description,
+      date,
+      time,
+      allowedAge,
+      slots,
+      status // ← added status from req.body
+    } = req.body;
+
     const tournamentId = req.params.id;
 
-    // Validate slots input if required
+    // Validate and process slots
     let processedSlots = [];
     if (slots && Array.isArray(slots)) {
       processedSlots = slots.map(slot => ({
@@ -89,6 +113,11 @@ export const updateTournament = async (req, res) => {
         slots: processedSlots,
       },
     };
+
+    // Add status to updateData if provided
+    if (status) {
+      updateData.status = status;
+    }
 
     // Handle image update if new file uploaded
     if (req.file) {
@@ -120,6 +149,7 @@ export const updateTournament = async (req, res) => {
         },
         image: updatedTournament.image,
         imageUrl: updatedTournament.image ? `/uploads/tournamentImg/${updatedTournament.image}` : null,
+        status: updatedTournament.status
       },
     });
 
@@ -188,6 +218,7 @@ export const getAllTournaments = async (req, res) => {
       description: t.description,
       location: t.location,
       price: t.price,
+      status: t.status,
       details: {
         date: t.details.date,
         time: t.details.time,
@@ -299,5 +330,51 @@ export const getUpcomingTournament = async (req, res) => {
   } catch (error) {
     console.error('Error fetching upcoming tournament:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
+  }
+};
+
+
+
+export const getTournamentTeams = async (req, res) => {
+  try {
+    const { tournamentId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(tournamentId)) {
+      return res.status(400).json({ message: "Invalid tournamentId" });
+    }
+
+    const tournament = await Tournament.findById(tournamentId)
+      .populate({
+        path: "teams",
+        select: "teamName categoryId tournamentId players createdAt updatedAt",
+        populate: {
+          path: "players",
+          select: "name role subRole designation", // assuming you added subRole & designation fields
+        }
+      })
+      .lean();
+
+    if (!tournament) {
+      return res.status(404).json({ message: "Tournament not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      tournament: {
+        _id: tournament._id,
+        name: tournament.name,
+        date: tournament.date,
+        timeSlot: tournament.timeSlot,
+        price: tournament.price,
+        image: tournament.image,
+        details: tournament.details,
+        teams: tournament.teams,  // populated with full team details
+        updatedAt: tournament.updatedAt
+      }
+    });
+
+  } catch (error) {
+    console.error("Error fetching tournament teams:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
   }
 };

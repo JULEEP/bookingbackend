@@ -275,3 +275,35 @@ export const uploadProductImage = multer({
   fileFilter: fileFilterProduct,
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB file size limit
 });
+
+
+
+// Storage configuration for notification files
+const storageNotification = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, "uploads/notificationFiles"); // Ensure this folder exists in your project root
+  },
+  filename: (req, file, cb) => {
+    cb(null, Date.now() + path.extname(file.originalname)); // unique filename using timestamp + original extension
+  },
+});
+
+// File filter - allow images and docs (pdf, docx, png, jpg, jpeg, gif)
+const fileFilterNotification = (req, file, cb) => {
+  const allowedTypes = /jpeg|jpg|png|gif|pdf|doc|docx/;
+  const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+  const mimetype = allowedTypes.test(file.mimetype);
+
+  if (extname && mimetype) {
+    cb(null, true);
+  } else {
+    cb(new Error("Only image and document files are allowed!"));
+  }
+};
+
+// Multer instance for notification uploads
+export const uploadNotificationFile = multer({
+  storage: storageNotification,
+  fileFilter: fileFilterNotification,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB max size
+});

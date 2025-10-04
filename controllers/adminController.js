@@ -6,11 +6,14 @@ import Category from "../models/categoryModel.js";
 import Commission from "../models/Commission.js";
 import Coupon from "../models/Coupon.js";
 import Match from "../models/Match.js";
+import Notification from "../models/Notification.js";
 import PaymentIntegration from "../models/PaymentIntegration.js";
 import Plan from "../models/Plan.js";
 import SportsProduct from "../models/SportsProduct.js";
 import Turf from "../models/Turf.js";
 import User from "../models/userModel.js";
+import path from 'path'
+import fs from 'fs'
 
 
 
@@ -94,8 +97,7 @@ export const createTurf = async (req, res) => {
       slots
     } = req.body;
 
-    // Multer files are available in req.files (array)
-    // Map filenames from uploaded files
+    // Multer files
     const images = req.files ? req.files.map(file => file.filename) : [];
 
     // Parse facilities
@@ -124,8 +126,9 @@ export const createTurf = async (req, res) => {
       closingTime,
       description,
       facilities: parsedFacilities,
-      images,  // 👈 Save array of images
-      slots: parsedSlots
+      images,
+      slots: parsedSlots,
+      status: "enabled"   // ✅ Default status rakha
     });
 
     await newTurf.save();
@@ -146,7 +149,8 @@ export const createTurf = async (req, res) => {
         facilities: newTurf.facilities,
         images: newTurf.images,
         imageUrls: newTurf.images.map(img => `/uploads/turfImg/${img}`),
-        slots: newTurf.slots
+        slots: newTurf.slots,
+        status: newTurf.status   // ✅ Response me bhi bheja
       }
     });
   } catch (error) {
@@ -154,6 +158,7 @@ export const createTurf = async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 };
+
 
 
 
@@ -174,7 +179,8 @@ export const getAllTurfs = async (req, res) => {
       facilities: turf.facilities,
       images: turf.images,
       imageUrls: turf.images.map(img => `/uploads/turfImg/${img}`),
-      slots: turf.slots
+      slots: turf.slots,
+      status:turf.status
     }));
 
     res.status(200).json({
@@ -1490,5 +1496,169 @@ export const getAllProducts = async (req, res) => {
   } catch (error) {
     console.error('Error fetching products:', error);
     res.status(500).json({ message: 'Failed to fetch products', error });
+  }
+};
+
+
+
+export const sendNotification = async (req, res) => {
+  try {
+    const { sendToAll, userId, title, message } = req.body;
+    const file = req.file; // multer uploads this
+
+    if (!title || !message) {
+      return res.status(400).json({ message: "Title and message are required" });
+    }
+
+    let recipients = [];
+
+    if (sendToAll === "true") {
+      recipients = await User.find({}, "_id email name");
+      if (!recipients.length) {
+        return res.status(404).json({ message: "No users found to send notification" });
+      }
+    } else {
+      if (!userId) {
+        return res.status(400).json({ message: "UserId is required if not sending to all" });
+      }
+
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      recipients.push(user);
+    }
+
+    const notificationData = {
+      title,
+      message,
+      filePath: file ? file.path : null,
+      recipients: recipients.map((user) => user._id),
+      date: new Date(),
+    };
+
+    const savedNotification = await Notification.create(notificationData);
+
+    return res.status(200).json({
+      message: `Notification sent to ${sendToAll === "true" ? "all users" : recipients.length + " user(s)"}`,
+      notification: savedNotification,
+    });
+  } catch (error) {
+    console.error("Error sending notification:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+// ================================
+// GET: /admin/getallnotifications
+// ================================
+export const getAllNotifications = async (req, res) => {
+  try {
+    const notifications = await Notification.find({})
+      .populate("recipients", "name email") // populate recipients' names & emails
+      .sort({ date: -1 }); // newest first
+
+    if (!notifications || notifications.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: "No notifications found",
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      notifications,
+    });
+  } catch (error) {
+    console.error("Error fetching notifications:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching notifications",
+      error: error.message,
+    });
+  }
+};
+
+
+
+export const updateNotification = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { sendToAll, userId, title, message } = req.body;
+    const file = req.file;
+
+    if (!title || !message) {
+      return res.status(400).json({ message: "Title and message are required" });
+    }
+
+    let recipients = [];
+
+    if (sendToAll === "true") {
+      recipients = await User.find({}, "_id email name");
+      if (!recipients.length) {
+        return res.status(404).json({ message: "No users found to send notification" });
+      }
+    } else {
+      if (!userId) {
+        return res.status(400).json({ message: "UserId is required if not sending to all" });
+      }
+
+      const user = await User.findById(userId);
+      if (!user) {
+        return res.status(404).json({ message: "User not found" });
+      }
+
+      recipients.push(user);
+    }
+
+    const updateData = {
+      title,
+      message,
+      recipients: recipients.map((user) => user._id),
+      date: new Date(),
+    };
+
+    if (file) {
+      updateData.filePath = file.path;
+    }
+
+    const updatedNotification = await Notification.findByIdAndUpdate(id, updateData, {
+      new: true,
+    });
+
+    if (!updatedNotification) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Notification updated successfully",
+      notification: updatedNotification,
+    });
+  } catch (error) {
+    console.error("Error updating notification:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+
+
+export const deleteNotification = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    const deletedNotification = await Notification.findByIdAndDelete(id);
+
+    if (!deletedNotification) {
+      return res.status(404).json({ message: "Notification not found" });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Notification deleted successfully",
+    });
+  } catch (error) {
+    console.error("Error deleting notification:", error);
+    return res.status(500).json({ message: "Server error", error: error.message });
   }
 };
