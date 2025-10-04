@@ -2,8 +2,8 @@ import express from 'express';
 import dotenv from 'dotenv';
 import userRoutes from './routes/userRoutes.js';
 import categoryRoutes from './routes/categoryRoutes.js';
-import turnamentRoutes from './routes/turnamentRoutes.js'
-import adminRoutes from './routes/adminRoutes.js'
+import turnamentRoutes from './routes/turnamentRoutes.js';
+import adminRoutes from './routes/adminRoutes.js';
 import connectDB from './config/db.js'; // MongoDB connection function
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -57,20 +57,27 @@ const io = new Server(server, {
   }
 });
 
-// Socket connection handle karo
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);
 
-  // Join specific match room
+  // Listen for "join-match" event to join a specific match room
   socket.on('join-match', (matchId) => {
     socket.join(matchId);
     console.log(`Socket ${socket.id} joined match room: ${matchId}`);
   });
 
+  // Listen for the "live-match-update" event sent by the server
+  socket.on('live-match-update', (data) => {
+    console.log('Live match update received:', data); // Log the live match update data
+    // You can handle any other logic you want with the data here
+  });
+
+  // Log when the user disconnects
   socket.on('disconnect', () => {
     console.log('User disconnected:', socket.id);
   });
 });
+
 
 // ✅ IMPORTANT: Use server.listen instead of app.listen
 const PORT = process.env.PORT || 3000;

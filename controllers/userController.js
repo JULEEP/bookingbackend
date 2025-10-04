@@ -877,6 +877,7 @@ export const getSingleMatchById = async (req, res) => {
       return res.status(400).json({ success: false, message: "Match ID is required" });
     }
 
+    // Find the match by ID and populate related fields
     const match = await Match.findById(id)
       .populate("categoryId", "name")
       .populate("tournamentId", "name")
@@ -909,6 +910,14 @@ export const getSingleMatchById = async (req, res) => {
       };
     }
 
+    // Emit live match data to all connected clients
+    io.emit('live-match-update', {
+      matchId: id,
+      liveData, // Send the live score, wickets, overs, etc.
+      mvpLeaderboard,
+      topPerformers
+    });
+
     return res.status(200).json({
       success: true,
       match: {
@@ -928,7 +937,6 @@ export const getSingleMatchById = async (req, res) => {
     return res.status(500).json({ message: "Server error", error: error.message });
   }
 };
-
 
 
 
