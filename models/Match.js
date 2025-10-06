@@ -73,6 +73,13 @@ bowling: {
   runs: { type: Number, default: 0 },         // total runs
   wickets: { type: Number, default: 0 },      // total wickets
   runRate: { type: Number, default: 0 },      // runs per over
+
+  overs: { type: Number, default: 0 },       // max overs
+wickets: { type: Number, default: 0 },     // current wickets
+maxWickets: { type: Number, default: 10 }, // ✅ ADD THIS
+target: { type: Number, default: null },
+totalOvers: { type: Number, default: 20 },  // or your match overs config
+
   fallOfWickets: [
     {
       score: String,                          // e.g. "10/1"
@@ -98,14 +105,6 @@ bowling: {
       wickets: { type: Number, default: 0 },
       overs: { type: Number, default: 0 },
       runRate: { type: Number, default: 0 },
-      fallOfWickets: [
-        {
-          player: String,
-          type: String,
-          fielder: String,
-          runOnDelivery: Number
-        }
-      ],
       commentary: [String]
     }
   ],

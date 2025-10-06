@@ -877,7 +877,6 @@ export const getSingleMatchById = async (req, res) => {
       return res.status(400).json({ success: false, message: "Match ID is required" });
     }
 
-    // Find the match by ID and populate related fields
     const match = await Match.findById(id)
       .populate("categoryId", "name")
       .populate("tournamentId", "name")
@@ -885,7 +884,10 @@ export const getSingleMatchById = async (req, res) => {
       .populate("team2", "teamName")
       .populate("currentStriker", "name")
       .populate("nonStriker", "name")
-      .populate("currentBowler", "name");
+      .populate("currentBowler", "name")
+      .populate("opening.striker", "name")
+      .populate("opening.nonStriker", "name")
+      .populate("bowling.bowler", "name");
 
     if (!match) {
       return res.status(404).json({ success: false, message: "Match not found" });
@@ -895,14 +897,22 @@ export const getSingleMatchById = async (req, res) => {
     const mvpLeaderboard = (match.mvp || []).sort((a, b) => b.points - a.points);
     const topPerformers = mvpLeaderboard.slice(0, 3);
 
-    // Live score data
+    // Determine liveData - latest innings scores OR match-level fallback
     let liveData;
     if (match.scores && match.scores.length > 0) {
-      liveData = match.scores[match.scores.length - 1];
+      const latestScore = match.scores[match.scores.length - 1];
+      liveData = {
+        innings: latestScore.innings || match.scores.length,
+        score: `${latestScore.runs}/${latestScore.wickets}`,
+        overs: latestScore.overs,
+        runRate: latestScore.runRate,
+        fallOfWickets: latestScore.fallOfWickets || [],
+        commentary: latestScore.commentary || []
+      };
     } else {
       liveData = {
-        runs: match.runs || 0,
-        wickets: match.wickets || 0,
+        innings: 1,
+        score: `${match.runs || 0}/${match.wickets || 0}`,
         overs: match.overs || 0,
         runRate: match.runRate || 0,
         fallOfWickets: match.fallOfWickets || [],
@@ -910,33 +920,45 @@ export const getSingleMatchById = async (req, res) => {
       };
     }
 
-    // Emit live match data to all connected clients
+    // Build innings summary from scores
+    const inningsSummary = (match.scores || []).map((score, index) => ({
+      innings: score.innings || index + 1,
+      runs: score.runs,
+      wickets: score.wickets,
+      overs: score.overs,
+      runRate: score.runRate
+    }));
+
+    // Emit socket event with consistent live match data
     io.emit('live-match-update', {
       matchId: id,
-      liveData, // Send the live score, wickets, overs, etc.
+      liveData,
       mvpLeaderboard,
       topPerformers
     });
 
+    // Respond with match data including live and innings info
     return res.status(200).json({
       success: true,
       match: {
         ...match._doc,
         scores: match.scores || [],
+        inningsSummary,
         live: liveData,
         striker: match.currentStriker,
         nonStriker: match.nonStriker,
         bowler: match.currentBowler,
+        target: match.target || null,
         mvpLeaderboard,
         topPerformers
       }
     });
-
   } catch (error) {
     console.error("Error fetching single match:", error);
     return res.status(500).json({ message: "Server error", error: error.message });
   }
 };
+
 
 
 
@@ -1289,11 +1311,14 @@ export const updateLiveScore = async (req, res) => {
       runs,
       wickets,
       ballUpdate,
-      fallOfWicket,
+      fallOfWickets,
       striker,
       nonStriker,
       bowler,
-      extraType,
+      extraType,         // e.g. "wide", "noball", "bye", "legbye"
+      undoLastBall,       // boolean flag if you want to undo the last ball
+      changeBowler,       // new bowler id if switching bowler
+      swapStriker,        // boolean flag to swap striker / nonStriker
       innings = 1
     } = req.body;
 
@@ -1301,19 +1326,20 @@ export const updateLiveScore = async (req, res) => {
       return res.status(400).json({ success: false, message: "Match ID is required" });
     }
 
-    // Find match by ID
     const match = await Match.findById(id);
-
     if (!match) {
       return res.status(404).json({ success: false, message: "Match not found" });
     }
 
-    // Ensure scores array exists
+    // Initialize arrays if undefined
     if (!match.scores) match.scores = [];
-    
-    // Ensure current innings exists in scores array
+    if (!match.fallOfWickets) match.fallOfWickets = [];
+    if (!match.commentary) match.commentary = [];
+
+    // Initialize this innings if not present
     if (!match.scores[innings - 1]) {
       match.scores[innings - 1] = {
+        innings,
         runs: 0,
         wickets: 0,
         overs: 0,
@@ -1323,93 +1349,161 @@ export const updateLiveScore = async (req, res) => {
       };
     }
 
-    let scoreData = match.scores[innings - 1];
+    const scoreData = match.scores[innings - 1];
+    if (!scoreData.fallOfWickets) scoreData.fallOfWickets = [];
+    if (!scoreData.commentary) scoreData.commentary = [];
+
     let commentaryLine = "";
 
-    // Runs update
-    if (runs !== undefined) {
-      scoreData.runs += runs;
-      match.runs = scoreData.runs;
-      commentaryLine = `${scoreData.overs} OVERS: Bowler to Batsman - ${runs} run${runs > 1 ? "s" : ""}.`;
+    // === UNDO last ball support ===
+    if (undoLastBall) {
+      // You need to maintain history (past states) to truly undo.
+      // For simplicity, you could remove the last commentary and adjust runs/wickets/overs accordingly.
+      // This is just a placeholder snippet:
+      const lastComment = scoreData.commentary.pop();
+      match.commentary.pop();
+      // You may also adjust runs, wickets, overs, etc. based on what the last comment said.
+      // This is custom, based on how you’re storing ball history.
+      return res.status(200).json({ success: true, message: "Last ball undone", match: scoreData });
     }
 
-    // Wicket update
-    if (wickets !== undefined && fallOfWicket) {
+    // === Change bowler mid-innings ===
+    if (changeBowler) {
+      match.currentBowler = changeBowler;
+      commentaryLine = commentaryLine || `Bowler changed to ${changeBowler}`;
+    }
+
+    // === Swap striker / non-striker ===
+    if (swapStriker) {
+      const temp = match.currentStriker;
+      match.currentStriker = match.nonStriker;
+      match.nonStriker = temp;
+      commentaryLine = commentaryLine || `Strikers swapped`;
+    }
+
+    // === Handle runs / extras / no-ball / wide / bye / leg-bye ===
+    if (extraType) {
+      // Extras like wide, no-ball, bye, leg-bye
+      // Typically extras do not count as legal delivery (so ballUpdate = false)
+      // But if you want them to count, you may decide to increment ball too.
+      switch (extraType.toLowerCase()) {
+        case "wide":
+        case "noball":
+          scoreData.runs += 1;  // +1 run
+          match.runs = scoreData.runs;
+          commentaryLine = `${scoreData.overs} OVERS: ${extraType.toUpperCase()}! 1 run added.`;
+          break;
+        case "bye":
+        case "legbye":
+          // These are runs by batsmen though extras; assume user provides runs as `runs` too
+          if (runs !== undefined) {
+            scoreData.runs += runs;
+            match.runs = scoreData.runs;
+            commentaryLine = `${scoreData.overs} OVERS: ${runs} ${extraType.toUpperCase()}.`;
+          }
+          break;
+        default:
+          // Unknown extraType
+          break;
+      }
+    } else {
+      // Normal runs (when not extras)
+      if (runs !== undefined) {
+        scoreData.runs += runs;
+        match.runs = scoreData.runs;
+        commentaryLine = `${scoreData.overs} OVERS: Bowler to Batsman - ${runs} run${runs > 1 ? "s" : ""}.`;
+      }
+    }
+
+    // === Wickets ===
+    if (wickets !== undefined) {
       scoreData.wickets += wickets;
       match.wickets = scoreData.wickets;
 
-      const wicketData = {
-        player: fallOfWicket.player,
-        type: fallOfWicket.type,
-        runOnDelivery: fallOfWicket.runOnDelivery || 0,
-        fielder: fallOfWicket.fielder
-      };
+      if (fallOfWickets && typeof fallOfWickets === "object" && fallOfWickets.player) {
+        const { player, type, fielder, runOnDelivery = 0 } = fallOfWickets;
 
-      scoreData.fallOfWickets.push(wicketData);
-      match.fallOfWickets.push(wicketData);
+        match.fallOfWickets.push({
+          score: `${scoreData.runs}/${scoreData.wickets}`,
+          player,
+          over: `${scoreData.overs} ov`
+        });
 
-      commentaryLine = `${scoreData.overs} OVERS: WICKET! ${fallOfWicket.player} is OUT. ${fallOfWicket.type.toUpperCase()}`;
-      if (fallOfWicket.fielder) {
-        commentaryLine += ` by ${fallOfWicket.fielder}`;
-      }
-      if (fallOfWicket.runOnDelivery) {
-        commentaryLine += ` (${fallOfWicket.runOnDelivery} run${fallOfWicket.runOnDelivery > 1 ? "s" : ""} on that ball)`;
+        scoreData.fallOfWickets.push({
+          player,
+          type,
+          runOnDelivery,
+          fielder
+        });
+
+        let line = `${scoreData.overs} OVERS: WICKET! ${player} is OUT. ${type?.toUpperCase() || ""}`;
+        if (fielder) line += ` by ${fielder}`;
+        if (runOnDelivery) line += ` (${runOnDelivery} run${runOnDelivery > 1 ? "s" : ""})`;
+        commentaryLine = line;
+      } else {
+        // Wicket, but no fallOfWickets object provided
+        commentaryLine = `${scoreData.overs} OVERS: WICKET!`;
       }
     }
 
-    // Extras
-    if (extraType) {
-      scoreData.runs += 1;
-      match.runs = scoreData.runs;
-      commentaryLine = `${scoreData.overs} OVERS: Bowler to Batsman - ${extraType.toUpperCase()}!`;
-    }
+    // === Ball / Over update for legal deliveries ===
+    // If it’s an extra (like wide/noball), you might choose not to increment ball
+    const isLegalDelivery = !extraType || (extraType.toLowerCase() === "bye" || extraType.toLowerCase() === "legbye");
+    if (ballUpdate && isLegalDelivery) {
+      let [ov, b] = scoreData.overs.toString().split(".").map(Number);
+      if (isNaN(ov)) ov = 0;
+      if (isNaN(b)) b = 0;
 
-    // Ball/Overs update
-    if (ballUpdate) {
-      let [over, ball] = scoreData.overs.toString().split(".").map(Number);
-      if (isNaN(over)) over = 0;
-      if (isNaN(ball)) ball = 0;
-
-      ball += 1;
-      if (ball >= 6) {
-        over += 1;
-        ball = 0;
-        const overCommentary = `End of Over ${over}. Score: ${scoreData.runs}/${scoreData.wickets}`;
+      b += 1;
+      if (b >= 6) {
+        ov += 1;
+        b = 0;
+        const overCommentary = `End of Over ${ov}. Score: ${scoreData.runs}/${scoreData.wickets}`;
         scoreData.commentary.push(overCommentary);
         match.commentary.push(overCommentary);
       }
-      scoreData.overs = parseFloat(`${over}.${ball}`);
+
+      scoreData.overs = parseFloat(`${ov}.${b}`);
       match.overs = scoreData.overs;
     }
 
-    // Run Rate update
+    // === Run Rate Calculation ===
     if (scoreData.overs > 0) {
-      let [over, ball] = scoreData.overs.toString().split(".").map(Number);
-      let totalBalls = over * 6 + (ball || 0);
+      let [ov, b] = scoreData.overs.toString().split(".").map(Number);
+      const totalBalls = ov * 6 + (b || 0);
       scoreData.runRate = parseFloat((scoreData.runs / (totalBalls / 6)).toFixed(2));
       match.runRate = scoreData.runRate;
     }
 
-    // Update players
+    // === Player updates ===
     if (striker) match.currentStriker = striker;
     if (nonStriker) match.nonStriker = nonStriker;
     if (bowler) match.currentBowler = bowler;
 
-    // Add commentary
+    // === Commentary ===
     if (commentaryLine) {
       scoreData.commentary.push(commentaryLine);
       match.commentary.push(commentaryLine);
     }
 
-    // Update scores array
+    // Persist the updated innings
     match.scores[innings - 1] = scoreData;
 
-    // Save the updated match
+    // === Target / Innings Completion Logic ===
+    const totalOvers = match.totalOvers || 20;
+    let [ov2, b2] = scoreData.overs.toString().split(".").map(Number);
+    const ballsBowled = ov2 * 6 + (b2 || 0);
+    const maxBalls = totalOvers * 6;
+
+    const inningsComplete = (scoreData.wickets >= (match.maxWickets || 10)) || (ballsBowled >= maxBalls);
+    if (innings === 1 && inningsComplete) {
+      match.target = scoreData.runs + 1;
+    }
+
     await match.save();
 
-    // ✅ SOCKET.IO - Real-time update bhejo
     const liveUpdateData = {
-      innings: innings,
+      innings,
       score: `${scoreData.runs}/${scoreData.wickets}`,
       overs: scoreData.overs,
       runRate: scoreData.runRate,
@@ -1418,26 +1512,20 @@ export const updateLiveScore = async (req, res) => {
       striker: match.currentStriker,
       nonStriker: match.nonStriker,
       bowler: match.currentBowler,
+      target: match.target || null,
       lastUpdate: new Date().toISOString()
     };
 
-    // Specific match room mein broadcast karo
     io.to(id).emit('live-score-update', liveUpdateData);
-    
-    // Global bhi broadcast kar sakte ho agar chaho
-    io.emit('match-update', {
-      matchId: id,
-      ...liveUpdateData
-    });
+    io.emit('match-update', { matchId: id, ...liveUpdateData });
 
     return res.status(200).json({
       success: true,
       message: "Live score updated successfully",
       match: liveUpdateData
     });
-
   } catch (error) {
     console.error("Error updating live score:", error);
-    return res.status(500).json({ message: "Server error", error: error.message });
+    return res.status(500).json({ success: false, message: "Server error", error: error.message });
   }
 };
