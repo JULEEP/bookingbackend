@@ -1,5 +1,5 @@
 import express from 'express';
-import { createCategory, deleteCategory, getAllCategories, updateCategory } from '../controllers/categoryController.js';
+import { createCategory, createGameCategory, deleteCategory, getAllCategories, getAllGameCategories, updateCategory } from '../controllers/categoryController.js';
 import { uploadCategoryImage } from '../config/multerConfig.js';
 
 const router = express.Router();
@@ -13,5 +13,12 @@ router.delete('/delete-category/:id', deleteCategory);
 
 // Route to get all categories
 router.get('/categories', getAllCategories);
+
+
+// game category
+router.post('/create-gamecategory', uploadCategoryImage.single('image'), createGameCategory);
+router.get('/gamecategories', getAllGameCategories);
+
+
 
 export default router;

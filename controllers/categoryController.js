@@ -1,4 +1,5 @@
 import Category from '../models/categoryModel.js';
+import GameCategory from '../models/GameCategory.js';
 
 // controllers/categoryController.js
 
@@ -119,3 +120,72 @@ export const deleteCategory = async (req, res) => {
   }
 };
 
+
+
+
+
+export const createGameCategory = async (req, res) => {
+  try {
+    const { name, description } = req.body;
+    const image = req.file ? req.file.filename : null;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Game category name is required' });
+    }
+
+    // ✅ Create new game category with default status
+    const newGameCategory = new GameCategory({
+      name,
+      description,
+      image,
+      status: 'active'
+    });
+
+    await newGameCategory.save();
+
+    res.status(201).json({
+      success: true,
+      message: 'Game category created successfully',
+      category: {
+        _id: newGameCategory._id,
+        name: newGameCategory.name,
+        description: newGameCategory.description,
+        image: newGameCategory.image,
+        status: newGameCategory.status,
+        imageUrl: image ? `/uploads/categoryImg/${image}` : null
+      }
+    });
+  } catch (error) {
+    console.error('Error creating game category:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+
+
+
+export const getAllGameCategories = async (req, res) => {
+  try {
+    const categories = await GameCategory.find().sort({ createdAt: -1 }); // newest first
+
+    const formattedCategories = categories.map(category => ({
+      _id: category._id,
+      name: category.name,
+      description: category.description,
+      image: category.image,
+      status: category.status,
+      imageUrl: category.image ? `/uploads/categoryImg/${category.image}` : null,
+      createdAt: category.createdAt,
+      updatedAt: category.updatedAt
+    }));
+
+    res.status(200).json({
+      success: true,
+      count: formattedCategories.length,
+      categories: formattedCategories
+    });
+  } catch (error) {
+    console.error('Error fetching game categories:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
