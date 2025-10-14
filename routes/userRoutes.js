@@ -35,7 +35,8 @@ import {
   startGameMatch,
   updateFootballMatchStatus,
   getSingleGameMatch,
-  getAllGameMatches
+  getAllGameMatches,
+  createGameMatchforFootball
 } from '../controllers/userController.js';
 import { uploadProfileImage } from '../config/multerConfig.js';
 import { getTournamentTeams } from '../controllers/turnamentController.js';
@@ -87,6 +88,8 @@ router.post('/startmatch/:userId/:matchId', startGameMatch);
 router.put("/footballstatus/:userId/:matchId" ,updateFootballMatchStatus);
 router.get('/getsingle/:matchId', getSingleGameMatch);
 router.get('/gamematches', getAllGameMatches);
+router.post('/creatematchforfootball/:userId', createGameMatchforFootball);
+
 
 
 
