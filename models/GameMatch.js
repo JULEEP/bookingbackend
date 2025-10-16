@@ -35,12 +35,10 @@ const gameMatchSchema = new mongoose.Schema({
   teamAId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'GameTeam',
-    required: true,
   },
   teamBId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'GameTeam',
-    required: true,
   },
 
   refereeName: { type: String },
@@ -84,6 +82,49 @@ const gameMatchSchema = new mongoose.Schema({
     of: Number,
     default: {},
   },
+
+
+    startedAt: Date,
+  startKickTime: Date,
+
+  scoreCard: [
+    {
+      teamId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'GameTeam'
+      },
+      teamName: String,
+      teamGoals: {
+        type: Number,
+        default: 0
+      },
+      players: [
+        {
+          playerId: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: 'User' // or 'Player'
+          },
+          playerName: String,
+          goals: {
+            type: Number,
+            default: 0
+          }
+        }
+      ]
+    }
+  ],
+
+  winner: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'GameTeam'
+},
+
+
+ startKickTime: { type: Date },
+  totalDuration: { type: Number },         // in minutes
+  halfTimeDuration: { type: Number },      // in minutes
+  extraTimeAllowed: { type: Boolean },
+  extraTimeDuration: { type: Number },     // in minutes
 
   createdAt: { type: Date, default: Date.now },
 }, {

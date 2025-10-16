@@ -52,10 +52,12 @@ app.use('/admin', adminRoutes);
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: "*", // Frontend URL
+    origin: "*",
     methods: ["GET", "POST"]
   }
 });
+
+app.set("io", io);
 
 io.on('connection', (socket) => {
   console.log('User connected:', socket.id);

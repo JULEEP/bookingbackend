@@ -921,6 +921,22 @@ export const getSingleMatchById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Match not found" });
     }
 
+    // ✅ DEBUG: Check overHistory data
+    console.log("=== OVERHISTORY ANALYSIS ===");
+    if (match.scores && match.scores.length > 0) {
+      match.scores.forEach((score, index) => {
+        console.log(`Innings ${score.innings || index + 1}:`);
+        console.log(`Total Runs: ${score.runs}, Overs: ${score.overs}`);
+        
+        if (score.overHistory && score.overHistory.length > 0) {
+          score.overHistory.forEach((over, overIndex) => {
+            console.log(`  Over ${over.overNumber}: ${over.balls?.length || 0} balls, ${over.runs} runs`);
+          });
+        }
+      });
+    }
+    console.log("=== END DEBUG ===");
+
     // ✅ CURRENT PLAYERS ON FIELD
     const getCurrentPlayers = () => {
       return {
@@ -942,10 +958,10 @@ export const getSingleMatchById = async (req, res) => {
     const currentPlayers = getCurrentPlayers();
     const currentInnings = match.currentInnings || 1;
 
-    // ✅ CREATE: Player ID to name mapping
+    // ✅ PLAYER NAME MAPPING
     const playerNameMap = new Map();
 
-    // Team1 ke saare players ke names add karo
+    // Team1 players
     if (match.team1 && match.team1.players) {
       match.team1.players.forEach(player => {
         if (player._id) {
@@ -954,7 +970,7 @@ export const getSingleMatchById = async (req, res) => {
       });
     }
 
-    // Team2 ke saare players ke names add karo
+    // Team2 players
     if (match.team2 && match.team2.players) {
       match.team2.players.forEach(player => {
         if (player._id) {
@@ -963,7 +979,7 @@ export const getSingleMatchById = async (req, res) => {
       });
     }
 
-    // All populated players se names collect karein
+    // Additional players
     const additionalPlayers = [
       match.currentStriker,
       match.nonStriker,
@@ -979,309 +995,229 @@ export const getSingleMatchById = async (req, res) => {
       }
     });
 
-    // ✅ FIXED FUNCTION: Get player data from playersHistory - IMPROVED
-    const getPlayerDataFromHistory = (playerId, inningsNumber) => {
-      if (!playerId || !match.playersHistory) return null;
-      
-      const playerIdStr = playerId.toString();
-      
-      // Find the specific innings
-      const inningsData = match.playersHistory.find(inn => inn.innings === inningsNumber);
-      if (!inningsData || !inningsData.players) return null;
-      
-      // Find player in this innings - DEEPER COMPARISON
-      const playerData = inningsData.players.find(p => {
-        if (!p.playerId) return false;
-        
-        // Handle both ObjectId and string comparisons
-        const historyPlayerId = p.playerId.toString ? p.playerId.toString() : String(p.playerId);
-        return historyPlayerId === playerIdStr;
-      });
-      
-      return playerData || null;
-    };
+    // ✅ FIXED FUNCTION: Calculate batting stats ONLY from overHistory
+    const calculateBattingStats = (playerId, inningsNumber) => {
+      if (!playerId) return null;
 
-    // ✅ IMPROVED FUNCTION: Calculate batting stats from ALL over data
-    const calculateBattingStatsFromAllOvers = (playerId, inningsNumber) => {
-      if (!playerId || !match.scores || match.scores.length === 0) return null;
-      
       const playerIdStr = playerId.toString();
+      
+      // ✅ ONLY USE OVERHISTORY - IGNORE PLAYERSHISTORY COMPLETELY
       let runs = 0;
       let balls = 0;
       let fours = 0;
       let sixes = 0;
-      
-      // Har score (innings) check karo
-      match.scores.forEach(score => {
-        // Sirf current innings ke data ko consider karo
-        if ((score.innings || 1) !== inningsNumber) return;
-        
-        // Current over se data
-        if (score.currentOver && score.currentOver.balls) {
-          score.currentOver.balls.forEach(ball => {
-            if (ball.striker && ball.striker.toString() === playerIdStr) {
-              runs += ball.runs || 0;
-              balls += 1;
-              
-              if (ball.runs === 4) fours += 1;
-              if (ball.runs === 6) sixes += 1;
-            }
-          });
-        }
-        
-        // Over history se data
-        if (score.overHistory) {
-          score.overHistory.forEach(over => {
-            if (over.balls) {
-              over.balls.forEach(ball => {
-                if (ball.striker && ball.striker.toString() === playerIdStr) {
-                  runs += ball.runs || 0;
-                  balls += 1;
-                  
-                  if (ball.runs === 4) fours += 1;
-                  if (ball.runs === 6) sixes += 1;
-                }
-              });
-            }
-          });
-        }
-      });
-      
+      let isOut = false;
+      let dismissal = '';
+
+      if (match.scores && match.scores.length > 0) {
+        match.scores.forEach(score => {
+          if ((score.innings || 1) !== inningsNumber) return;
+          
+          // ✅ ONLY SOURCE OF TRUTH: OVERHISTORY
+          if (score.overHistory) {
+            score.overHistory.forEach(over => {
+              if (over.balls) {
+                over.balls.forEach(ball => {
+                  const ballStrikerId = ball.striker?.toString();
+                  if (ballStrikerId === playerIdStr) {
+                    const ballRuns = ball.runs || 0;
+                    runs += ballRuns;
+                    
+                    // ✅ ONLY COUNT LEGAL DELIVERY BALLS
+                    if (!ball.extraType || (ball.extraType !== 'wide' && ball.extraType !== 'noball')) {
+                      balls += 1;
+                    }
+                    
+                    if (ballRuns === 4) fours += 1;
+                    if (ballRuns === 6) sixes += 1;
+                    
+                    // ✅ CHECK WICKET
+                    if (ball.wicket && ball.striker?.toString() === playerIdStr) {
+                      isOut = true;
+                      dismissal = ball.dismissalType || '';
+                    }
+                  }
+                });
+              }
+            });
+          }
+        });
+      }
+
+      const strikeRate = balls > 0 ? parseFloat(((runs / balls) * 100).toFixed(2)) : 0;
+
+      console.log(`📊 OVERHISTORY ONLY - Batsman ${playerNameMap.get(playerIdStr)}: ${runs}r/${balls}b, 4s:${fours}, 6s:${sixes}, Out:${isOut}`);
+
       return {
         runs,
         balls,
         fours,
         sixes,
-        strikeRate: balls > 0 ? parseFloat(((runs / balls) * 100).toFixed(2)) : 0
+        strikeRate,
+        isOut,
+        dismissals: dismissal
       };
     };
 
-    // ✅ IMPROVED FUNCTION: Calculate bowling stats from ALL over data
-    const calculateBowlingStatsFromAllOvers = (playerId, inningsNumber) => {
-      if (!playerId || !match.scores || match.scores.length === 0) return null;
-      
+    // ✅ FIXED FUNCTION: Calculate bowling stats ONLY from overHistory
+    const calculateBowlingStats = (playerId, inningsNumber) => {
+      if (!playerId) return null;
+
       const playerIdStr = playerId.toString();
+      
+      // ✅ ONLY USE OVERHISTORY - IGNORE PLAYERSHISTORY COMPLETELY
       let overs = 0;
       let runsConceded = 0;
       let wickets = 0;
+      let maidens = 0;
       let wides = 0;
       let noBalls = 0;
-      let maidens = 0;
-      
-      // Har score (innings) check karo
-      match.scores.forEach(score => {
-        // Sirf current innings ke data ko consider karo
-        if ((score.innings || 1) !== inningsNumber) return;
-        
-        // Current over se data
-        if (score.currentOver && score.currentOver.balls && score.currentOver.balls.length > 0) {
-          const firstBallBowler = score.currentOver.balls[0]?.bowler;
-          if (firstBallBowler && firstBallBowler.toString() === playerIdStr) {
-            let overRuns = 0;
-            let overWickets = 0;
-            let overWides = 0;
-            let overNoBalls = 0;
-            let validBalls = 0;
-            
-            score.currentOver.balls.forEach(ball => {
-              if (ball.bowler && ball.bowler.toString() === playerIdStr) {
-                overRuns += ball.runs || 0;
-                
-                if (ball.wicket) overWickets += 1;
-                if (ball.isWide) overWides += 1;
-                if (ball.isNoBall) overNoBalls += 1;
-                
-                // Valid balls count (excluding wides and no-balls)
-                if (!ball.isWide && !ball.isNoBall) {
-                  validBalls += 1;
-                }
-              }
-            });
-            
-            runsConceded += overRuns;
-            wickets += overWickets;
-            wides += overWides;
-            noBalls += overNoBalls;
-            
-            // Calculate overs from valid balls
-            overs += validBalls / 6;
-          }
-        }
-        
-        // Over history se data
-        if (score.overHistory) {
-          score.overHistory.forEach(over => {
-            if (over.balls && over.balls.length > 0) {
-              const firstBallBowler = over.balls[0]?.bowler;
-              if (firstBallBowler && firstBallBowler.toString() === playerIdStr) {
-                let overRuns = 0;
-                let overWickets = 0;
-                let overWides = 0;
-                let overNoBalls = 0;
-                let isMaiden = true;
-                let validBalls = 0;
-                
-                over.balls.forEach(ball => {
-                  if (ball.bowler && ball.bowler.toString() === playerIdStr) {
-                    overRuns += ball.runs || 0;
-                    
-                    if (ball.wicket) overWickets += 1;
-                    if (ball.isWide) overWides += 1;
-                    if (ball.isNoBall) overNoBalls += 1;
-                    
-                    // Valid balls count (excluding wides and no-balls)
-                    if (!ball.isWide && !ball.isNoBall) {
-                      validBalls += 1;
-                      // Maiden over check (no runs excluding extras)
-                      if ((ball.runs || 0) > 0) {
+
+      if (match.scores && match.scores.length > 0) {
+        match.scores.forEach(score => {
+          if ((score.innings || 1) !== inningsNumber) return;
+          
+          // ✅ COUNT COMPLETED OVERS FROM OVERHISTORY
+          if (score.overHistory) {
+            score.overHistory.forEach(over => {
+              if (over.balls && over.balls.length > 0) {
+                const firstBallBowler = over.balls[0]?.bowler?.toString();
+                if (firstBallBowler === playerIdStr) {
+                  overs += 1; // Each completed over is 1 over
+                  
+                  let overRuns = 0;
+                  let overWickets = 0;
+                  let overWides = 0;
+                  let overNoBalls = 0;
+                  let isMaiden = true;
+                  
+                  over.balls.forEach(ball => {
+                    if (ball.bowler?.toString() === playerIdStr) {
+                      // ✅ COUNT ALL RUNS CONCEDED BY THIS BOWLER
+                      overRuns += ball.runs || 0;
+                      
+                      // ✅ ADD EXTRA RUNS FOR WIDE/NOBALL
+                      if (ball.extraType === 'wide' || ball.extraType === 'noball') {
+                        overRuns += 1;
+                      }
+                      
+                      if (ball.wicket) overWickets += 1;
+                      if (ball.extraType === 'wide') overWides += 1;
+                      if (ball.extraType === 'noball') overNoBalls += 1;
+                      
+                      // ✅ MAIDEN OVER CHECK (no runs excluding extras)
+                      if ((ball.runs || 0) > 0 && ball.extraType !== 'wide' && ball.extraType !== 'noball') {
                         isMaiden = false;
                       }
                     }
-                  }
-                });
-                
-                runsConceded += overRuns;
-                wickets += overWickets;
-                wides += overWides;
-                noBalls += overNoBalls;
-                overs += 1; // Each completed over in history is 1 over
-                
-                if (isMaiden && validBalls >= 6) {
-                  maidens += 1;
+                  });
+                  
+                  runsConceded += overRuns;
+                  wickets += overWickets;
+                  wides += overWides;
+                  noBalls += overNoBalls;
+                  if (isMaiden) maidens += 1;
                 }
               }
-            }
-          });
-        }
-      });
-      
-      // Calculate economy rate
+            });
+          }
+        });
+      }
+
       const economy = overs > 0 ? parseFloat((runsConceded / overs).toFixed(2)) : 0;
-      
+
+      console.log(`📊 OVERHISTORY ONLY - Bowler ${playerNameMap.get(playerIdStr)}: ${overs}ov, ${runsConceded}r, ${wickets}w, Eco: ${economy}`);
+
       return {
         overs: parseFloat(overs.toFixed(1)),
         runsConceded,
         wickets,
-        wides,
-        noBalls,
         maidens,
-        economy
+        economy,
+        wides,
+        noBalls
       };
     };
 
-    // ✅ FUNCTION: Get current batsmen stats with detailed information
+    // ✅ CURRENT BATSMEN STATS
     const getCurrentBatsmenStats = () => {
-      const strikerStats = currentPlayers.currentStriker ? 
-        calculateBattingStatsFromAllOvers(currentPlayers.currentStriker._id, currentInnings) : null;
-      
-      const nonStrikerStats = currentPlayers.nonStriker ? 
-        calculateBattingStatsFromAllOvers(currentPlayers.nonStriker._id, currentInnings) : null;
-
-      // PlayersHistory se additional data lo
-      const strikerHistory = currentPlayers.currentStriker ? 
-        getPlayerDataFromHistory(currentPlayers.currentStriker._id, currentInnings) : null;
-      
-      const nonStrikerHistory = currentPlayers.nonStriker ? 
-        getPlayerDataFromHistory(currentPlayers.nonStriker._id, currentInnings) : null;
-
-      // Combine history and current over data
-      const combineBattingStats = (currentStats, historyStats, player) => {
+      const formatBatsmanDisplay = (stats, player) => {
         if (!player) return null;
 
-        let finalRuns = 0;
-        let finalBalls = 0;
-        let finalFours = 0;
-        let finalSixes = 0;
-
-        // Pehle history data lo (agar hai)
-        if (historyStats) {
-          finalRuns = historyStats.runs || 0;
-          finalBalls = historyStats.balls || 0;
-          finalFours = historyStats.fours || 0;
-          finalSixes = historyStats.sixes || 0;
+        if (!stats) {
+          return {
+            playerId: player._id,
+            playerName: player.name,
+            runs: 0,
+            balls: 0,
+            fours: 0,
+            sixes: 0,
+            strikeRate: 0,
+            display: "0* (0 balls)",
+            detailedDisplay: "0* (0 balls, 0x4, 0x6) SR: 0"
+          };
         }
-
-        // Phir current over data add karo
-        if (currentStats) {
-          finalRuns += currentStats.runs || 0;
-          finalBalls += currentStats.balls || 0;
-          finalFours += currentStats.fours || 0;
-          finalSixes += currentStats.sixes || 0;
-        }
-
-        const strikeRate = finalBalls > 0 ? parseFloat(((finalRuns / finalBalls) * 100).toFixed(2)) : 0;
 
         return {
           playerId: player._id,
           playerName: player.name,
-          runs: finalRuns,
-          balls: finalBalls,
-          fours: finalFours,
-          sixes: finalSixes,
-          strikeRate: strikeRate,
-          display: `${finalRuns}* (${finalBalls} balls)`,
-          detailedDisplay: `${finalRuns}* (${finalBalls} balls, ${finalFours}x4, ${finalSixes}x6) SR: ${strikeRate}`
+          runs: stats.runs,
+          balls: stats.balls,
+          fours: stats.fours,
+          sixes: stats.sixes,
+          strikeRate: stats.strikeRate,
+          display: `${stats.runs}${!stats.isOut ? '*' : ''} (${stats.balls} balls)`,
+          detailedDisplay: `${stats.runs}${!stats.isOut ? '*' : ''} (${stats.balls} balls, ${stats.fours}x4, ${stats.sixes}x6) SR: ${stats.strikeRate}`
         };
       };
 
+      const strikerStats = calculateBattingStats(currentPlayers.currentStriker?._id, currentInnings);
+      const nonStrikerStats = calculateBattingStats(currentPlayers.nonStriker?._id, currentInnings);
+
       return {
-        striker: combineBattingStats(strikerStats, strikerHistory, currentPlayers.currentStriker),
-        nonStriker: combineBattingStats(nonStrikerStats, nonStrikerHistory, currentPlayers.nonStriker)
+        striker: formatBatsmanDisplay(strikerStats, currentPlayers.currentStriker),
+        nonStriker: formatBatsmanDisplay(nonStrikerStats, currentPlayers.nonStriker)
       };
     };
 
-    // ✅ FUNCTION: Get current bowler stats
+    // ✅ CURRENT BOWLER STATS
     const getCurrentBowlerStats = () => {
       if (!currentPlayers.currentBowler) return null;
 
-      const currentStats = calculateBowlingStatsFromAllOvers(currentPlayers.currentBowler._id, currentInnings);
-      const historyStats = getPlayerDataFromHistory(currentPlayers.currentBowler._id, currentInnings);
-
-      let finalOvers = 0;
-      let finalRunsConceded = 0;
-      let finalWickets = 0;
-      let finalMaidens = 0;
-      let finalWides = 0;
-      let finalNoBalls = 0;
-
-      // Pehle history data lo
-      if (historyStats) {
-        finalOvers = historyStats.overs || 0;
-        finalRunsConceded = historyStats.runsConceded || 0;
-        finalWickets = historyStats.wickets || 0;
-        finalMaidens = historyStats.maidens || 0;
-        finalWides = historyStats.wides || 0;
-        finalNoBalls = historyStats.noBalls || 0;
+      const stats = calculateBowlingStats(currentPlayers.currentBowler._id, currentInnings);
+      
+      if (!stats) {
+        return {
+          playerId: currentPlayers.currentBowler._id,
+          playerName: currentPlayers.currentBowler.name,
+          overs: 0,
+          runs: 0,
+          wickets: 0,
+          maidens: 0,
+          economy: 0,
+          wides: 0,
+          noBalls: 0,
+          display: "0-0-0-0",
+          detailedDisplay: "0 overs, 0 maidens, 0 runs, 0 wickets"
+        };
       }
-
-      // Phir current over data add karo
-      if (currentStats) {
-        finalOvers += currentStats.overs || 0;
-        finalRunsConceded += currentStats.runsConceded || 0;
-        finalWickets += currentStats.wickets || 0;
-        finalMaidens += currentStats.maidens || 0;
-        finalWides += currentStats.wides || 0;
-        finalNoBalls += currentStats.noBalls || 0;
-      }
-
-      const economy = finalOvers > 0 ? parseFloat((finalRunsConceded / finalOvers).toFixed(2)) : 0;
 
       return {
         playerId: currentPlayers.currentBowler._id,
         playerName: currentPlayers.currentBowler.name,
-        overs: parseFloat(finalOvers.toFixed(1)),
-        runs: finalRunsConceded,
-        wickets: finalWickets,
-        maidens: finalMaidens,
-        economy: economy,
-        wides: finalWides,
-        noBalls: finalNoBalls,
-        display: `${parseFloat(finalOvers.toFixed(1))}-${finalMaidens}-${finalRunsConceded}-${finalWickets}`,
-        detailedDisplay: `${parseFloat(finalOvers.toFixed(1))} overs, ${finalMaidens} maidens, ${finalRunsConceded} runs, ${finalWickets} wickets`
+        overs: stats.overs,
+        runs: stats.runsConceded,
+        wickets: stats.wickets,
+        maidens: stats.maidens,
+        economy: stats.economy,
+        wides: stats.wides,
+        noBalls: stats.noBalls,
+        display: `${stats.overs}-${stats.maidens}-${stats.runsConceded}-${stats.wickets}`,
+        detailedDisplay: `${stats.overs} overs, ${stats.maidens} maidens, ${stats.runsConceded} runs, ${stats.wickets} wickets`
       };
     };
 
-    // ✅ FUNCTION: Add status to team players WITH STATS
+    // ✅ ADD STATUS TO TEAM PLAYERS
     const addStatusToTeamPlayers = (team, isBattingTeam = false) => {
       if (!team || !team.players) return team;
 
@@ -1299,9 +1235,7 @@ export const getSingleMatchById = async (req, res) => {
             status: player.status || 'Not Playing'
           };
 
-          // Agar batting team hai to batsmen ke stats add karo
           if (isBattingTeam) {
-            // Check if this is striker
             if (currentPlayers.currentStriker && currentPlayers.currentStriker._id.toString() === playerIdStr) {
               return {
                 ...basePlayer,
@@ -1315,9 +1249,7 @@ export const getSingleMatchById = async (req, res) => {
                   display: currentBatsmenStats.striker.display
                 } : null
               };
-            }
-            // Check if this is non-striker
-            else if (currentPlayers.nonStriker && currentPlayers.nonStriker._id.toString() === playerIdStr) {
+            } else if (currentPlayers.nonStriker && currentPlayers.nonStriker._id.toString() === playerIdStr) {
               return {
                 ...basePlayer,
                 status: 'Batting (Non-Striker)',
@@ -1331,10 +1263,7 @@ export const getSingleMatchById = async (req, res) => {
                 } : null
               };
             }
-          }
-          // Agar bowling team hai to bowler ke stats add karo
-          else {
-            // Check if this is current bowler
+          } else {
             if (currentPlayers.currentBowler && currentPlayers.currentBowler._id.toString() === playerIdStr) {
               return {
                 ...basePlayer,
@@ -1359,8 +1288,6 @@ export const getSingleMatchById = async (req, res) => {
     // ✅ TEAM STATUS DETERMINATION
     const determineTeamStatus = () => {
       const currentInnings = match.currentInnings || 1;
-      const totalInnings = match.totalInnings || 2;
-
       let battingTeam = null;
       let bowlingTeam = null;
 
@@ -1379,7 +1306,7 @@ export const getSingleMatchById = async (req, res) => {
         battingTeam,
         bowlingTeam,
         currentInnings,
-        totalInnings,
+        totalInnings: match.totalInnings || 2,
         matchStatus: match.status || 'live',
         toss: match.toss || {},
         decision: match.decision || 'bat',
@@ -1390,7 +1317,7 @@ export const getSingleMatchById = async (req, res) => {
 
     const teamStatus = determineTeamStatus();
 
-    // ✅ CREATE TEAMS WITH STATUS AND STATS
+    // ✅ CREATE TEAMS WITH STATUS
     const team1WithStatus = addStatusToTeamPlayers(
       match.team1, 
       teamStatus.battingTeam && teamStatus.battingTeam._id.toString() === match.team1._id.toString()
@@ -1441,21 +1368,42 @@ export const getSingleMatchById = async (req, res) => {
       lastUpdate: new Date().toISOString()
     };
 
-    // ✅ FIXED COMPLETE SCORECARD GENERATION
+    // ✅ COMPLETE SCORECARD GENERATION - OVERHISTORY ONLY
     const generateScorecard = () => {
-      if (!match.scores || match.scores.length === 0) {
-        return { innings: [], matchSummary: {} };
-      }
-
       const inningsData = [];
       const totalInnings = match.totalInnings || 2;
 
-      // Har innings ke liye data prepare karo
-      for (let i = 0; i < Math.min(match.scores.length, totalInnings); i++) {
-        const score = match.scores[i];
-        const inningsNumber = score.innings || i + 1;
+      console.log(`🎯 Generating scorecard from overHistory only...`);
+
+      // ✅ PEHLE SE HI DONO INNINGS BANA DO
+      for (let inningsNumber = 1; inningsNumber <= totalInnings; inningsNumber++) {
         
-        // Determine batting and bowling teams
+        // ✅ FIND EXISTING SCORE DATA FOR THIS INNINGS
+        let score = match.scores?.find(s => s.innings === inningsNumber);
+        
+        // ✅ AGAR SCORE DATA NAHI HAI, TOH EMPTY DATA BANAO
+        if (!score) {
+          score = {
+            innings: inningsNumber,
+            runs: 0,
+            wickets: 0,
+            overs: 0,
+            runRate: 0,
+            extras: {
+              wides: 0,
+              noBalls: 0,
+              byes: 0,
+              legByes: 0,
+              penalties: 0,
+              total: 0
+            },
+            overHistory: [],
+            currentOver: {},
+            fallOfWickets: []
+          };
+        }
+
+        // ✅ TEAMS DETERMINATION
         let battingTeam, bowlingTeam;
         if (inningsNumber === 1) {
           battingTeam = {
@@ -1467,6 +1415,7 @@ export const getSingleMatchById = async (req, res) => {
             name: team2WithStatus.teamName
           };
         } else {
+          // ✅ SECOND INNINGS: Team2 batting, Team1 bowling
           battingTeam = {
             id: team2WithStatus._id,
             name: team2WithStatus.teamName
@@ -1477,161 +1426,103 @@ export const getSingleMatchById = async (req, res) => {
           };
         }
 
-        // ✅ FIXED: Batting data - COMBINE ALL DATA SOURCES
+        // ✅ BATTING DATA - ONLY FROM OVERHISTORY
         const battingData = [];
-        
-        // Batting team ke saare players
         const battingTeamPlayers = inningsNumber === 1 ? team1WithStatus.players : team2WithStatus.players;
         
         battingTeamPlayers.forEach(teamPlayer => {
           const playerIdStr = teamPlayer._id.toString();
           const playerName = playerNameMap.get(playerIdStr) || teamPlayer.name;
+          const playerStats = calculateBattingStats(teamPlayer._id, inningsNumber);
           
-          // ✅ STEP 1: PlayersHistory se actual data lo
-          const playerInHistory = getPlayerDataFromHistory(teamPlayer._id, inningsNumber);
-          
-          // ✅ STEP 2: All overs se real-time data calculate karo
-          const allOversStats = calculateBattingStatsFromAllOvers(teamPlayer._id, inningsNumber);
-          
-          // ✅ STEP 3: Combine both data sources - PRIORITIZE HISTORY DATA
-          let finalRuns = 0;
-          let finalBalls = 0;
-          let finalFours = 0;
-          let finalSixes = 0;
-          
-          // Pehle history data use karo (yeh primary source hai)
-          if (playerInHistory) {
-            finalRuns = playerInHistory.runs || 0;
-            finalBalls = playerInHistory.balls || 0;
-            finalFours = playerInHistory.fours || 0;
-            finalSixes = playerInHistory.sixes || 0;
-          }
-          
-          // Agar history data nahi hai to all overs data use karo
-          if (!playerInHistory && allOversStats) {
-            finalRuns = allOversStats.runs || 0;
-            finalBalls = allOversStats.balls || 0;
-            finalFours = allOversStats.fours || 0;
-            finalSixes = allOversStats.sixes || 0;
-          }
-          
-          // Calculate strike rate
-          const strikeRate = finalBalls > 0 ? 
-            parseFloat(((finalRuns / finalBalls) * 100).toFixed(2)) : 0;
-          
-          // Determine player status and dismissal
           let status = 'Not Played Yet';
           let isNotOut = true;
           let dismissal = '';
           
-          if (playerInHistory) {
-            isNotOut = !(playerInHistory.isOut || (playerInHistory.dismissals && playerInHistory.dismissals.trim() !== ''));
-            dismissal = playerInHistory.dismissals || '';
-          }
-          
-          // Check if currently batting
-          if (currentPlayers.currentStriker && currentPlayers.currentStriker._id.toString() === playerIdStr) {
-            status = 'Batting (Striker)';
-            isNotOut = true;
-          } else if (currentPlayers.nonStriker && currentPlayers.nonStriker._id.toString() === playerIdStr) {
-            status = 'Batting (Non-Striker)';
-            isNotOut = true;
-          } else if (finalBalls > 0 || finalRuns > 0) {
-            status = isNotOut ? 'Batting Completed (Not Out)' : 'Out';
-          } else {
-            status = 'Not Played Yet';
+          if (playerStats && (playerStats.runs > 0 || playerStats.balls > 0)) {
+            isNotOut = !playerStats.isOut;
+            dismissal = playerStats.dismissals || '';
+            
+            // ✅ CURRENT INNINGS KE HISAB SE STATUS SET KARO
+            if (inningsNumber === match.currentInnings) {
+              if (currentPlayers.currentStriker && currentPlayers.currentStriker._id.toString() === playerIdStr) {
+                status = 'Batting (Striker)';
+              } else if (currentPlayers.nonStriker && currentPlayers.nonStriker._id.toString() === playerIdStr) {
+                status = 'Batting (Non-Striker)';
+              } else {
+                status = isNotOut ? 'Batting Completed (Not Out)' : 'Out';
+              }
+            } else {
+              // Previous innings completed
+              status = isNotOut ? 'Batting Completed (Not Out)' : 'Out';
+            }
+          } else if (inningsNumber === match.currentInnings) {
+            // ✅ CURRENT INNINGS KE PLAYERS KO BATTING STATUS DO
+            if (currentPlayers.currentStriker && currentPlayers.currentStriker._id.toString() === playerIdStr) {
+              status = 'Batting (Striker)';
+            } else if (currentPlayers.nonStriker && currentPlayers.nonStriker._id.toString() === playerIdStr) {
+              status = 'Batting (Non-Striker)';
+            }
           }
           
           battingData.push({
             playerId: teamPlayer._id,
             playerName: playerName,
-            runs: finalRuns,
-            balls: finalBalls,
-            fours: finalFours,
-            sixes: finalSixes,
-            strikeRate: strikeRate,
+            runs: playerStats?.runs || 0,
+            balls: playerStats?.balls || 0,
+            fours: playerStats?.fours || 0,
+            sixes: playerStats?.sixes || 0,
+            strikeRate: playerStats?.strikeRate || 0,
             dismissal: dismissal,
             isNotOut: isNotOut,
             status: status
           });
         });
 
-        // ✅ FIXED: Bowling data - COMBINE ALL DATA SOURCES
+        // ✅ BOWLING DATA - ONLY FROM OVERHISTORY
         const bowlingData = [];
-        
-        // Bowling team ke saare players
         const bowlingTeamPlayers = inningsNumber === 1 ? team2WithStatus.players : team1WithStatus.players;
         
         bowlingTeamPlayers.forEach(teamPlayer => {
           const playerIdStr = teamPlayer._id.toString();
           const playerName = playerNameMap.get(playerIdStr) || teamPlayer.name;
+          const playerStats = calculateBowlingStats(teamPlayer._id, inningsNumber);
           
-          // ✅ STEP 1: PlayersHistory se actual data lo
-          const playerInHistory = getPlayerDataFromHistory(teamPlayer._id, inningsNumber);
-          
-          // ✅ STEP 2: All overs se real-time data calculate karo
-          const allOversStats = calculateBowlingStatsFromAllOvers(teamPlayer._id, inningsNumber);
-          
-          // ✅ STEP 3: Combine both data sources - PRIORITIZE HISTORY DATA
-          let finalOvers = 0;
-          let finalRunsConceded = 0;
-          let finalWickets = 0;
-          let finalWides = 0;
-          let finalNoBalls = 0;
-          let finalMaidens = 0;
-          
-          // Pehle history data use karo (yeh primary source hai)
-          if (playerInHistory) {
-            finalOvers = playerInHistory.overs || 0;
-            finalRunsConceded = playerInHistory.runsConceded || 0;
-            finalWickets = playerInHistory.wickets || 0;
-            finalWides = playerInHistory.wides || 0;
-            finalNoBalls = playerInHistory.noBalls || 0;
-            finalMaidens = playerInHistory.maidens || 0;
-          }
-          
-          // Agar history data nahi hai to all overs data use karo
-          if (!playerInHistory && allOversStats) {
-            finalOvers = allOversStats.overs || 0;
-            finalRunsConceded = allOversStats.runsConceded || 0;
-            finalWickets = allOversStats.wickets || 0;
-            finalWides = allOversStats.wides || 0;
-            finalNoBalls = allOversStats.noBalls || 0;
-            finalMaidens = allOversStats.maidens || 0;
-          }
-          
-          // Calculate economy rate
-          const economy = finalOvers > 0 ? 
-            parseFloat((finalRunsConceded / finalOvers).toFixed(2)) : 0;
-          
-          // Determine player status
           let status = 'Not Played Yet';
           
-          // Check if currently bowling
-          if (currentPlayers.currentBowler && currentPlayers.currentBowler._id.toString() === playerIdStr) {
-            status = 'Bowling';
-          } else if (finalOvers > 0 || finalWickets > 0 || finalRunsConceded > 0) {
-            status = 'Bowling Completed';
-          } else {
-            status = 'Not Played Yet';
+          if (playerStats && (playerStats.overs > 0 || playerStats.wickets > 0 || playerStats.runsConceded > 0)) {
+            if (inningsNumber === match.currentInnings) {
+              if (currentPlayers.currentBowler && currentPlayers.currentBowler._id.toString() === playerIdStr) {
+                status = 'Bowling';
+              } else {
+                status = 'Bowling Completed';
+              }
+            } else {
+              status = 'Bowling Completed';
+            }
+          } else if (inningsNumber === match.currentInnings) {
+            // ✅ CURRENT INNINGS KE BOWLER KO STATUS DO
+            if (currentPlayers.currentBowler && currentPlayers.currentBowler._id.toString() === playerIdStr) {
+              status = 'Bowling';
+            }
           }
           
           bowlingData.push({
             playerId: teamPlayer._id,
             playerName: playerName,
-            overs: parseFloat(finalOvers.toFixed(1)),
-            maidens: finalMaidens,
-            runs: finalRunsConceded,
-            wickets: finalWickets,
-            economy: economy,
-            wides: finalWides,
-            noBalls: finalNoBalls,
+            overs: playerStats?.overs || 0,
+            maidens: playerStats?.maidens || 0,
+            runs: playerStats?.runsConceded || 0,
+            wickets: playerStats?.wickets || 0,
+            economy: playerStats?.economy || 0,
+            wides: playerStats?.wides || 0,
+            noBalls: playerStats?.noBalls || 0,
             status: status
           });
         });
 
-        // Extras calculate karo
-        const extras = {
+        // ✅ EXTRAS DATA
+        const extras = score.extras || {
           wides: score.wides || 0,
           noBalls: score.noBalls || 0,
           byes: score.byes || 0,
@@ -1639,6 +1530,9 @@ export const getSingleMatchById = async (req, res) => {
           penalties: score.penalties || 0,
           total: (score.wides || 0) + (score.noBalls || 0) + (score.byes || 0) + (score.legByes || 0) + (score.penalties || 0)
         };
+
+        // ✅ FALL OF WICKETS
+        const fallOfWickets = score.fallOfWickets || [];
 
         inningsData.push({
           inningsNumber: inningsNumber,
@@ -1651,11 +1545,11 @@ export const getSingleMatchById = async (req, res) => {
           extras: extras,
           batting: battingData,
           bowling: bowlingData,
-          fallOfWickets: score.fallOfWickets || []
+          fallOfWickets: fallOfWickets
         });
       }
 
-      // Match summary prepare karo
+      // Match summary
       const matchSummary = {
         toss: {
           winner: match.toss?.winner || null,
@@ -1670,8 +1564,16 @@ export const getSingleMatchById = async (req, res) => {
         manOfTheMatch: match.manOfTheMatch || null,
         venue: match.venue,
         date: match.date,
-        matchType: match.matchType
+        matchType: match.matchType,
+        target: match.target || null
       };
+
+      console.log(`✅ Final innings data:`, inningsData.map(inn => ({
+        inningsNumber: inn.inningsNumber,
+        battingTeam: inn.battingTeam.name,
+        totalRuns: inn.totalRuns,
+        totalWickets: inn.totalWickets
+      })));
 
       return {
         innings: inningsData,
@@ -1679,7 +1581,103 @@ export const getSingleMatchById = async (req, res) => {
       };
     };
 
+
+
+
+    // ✅ MVP Leaderboard + Top Performers (for UI)
+const calculateMVPLeaderboard = (scorecard) => {
+  if (!scorecard || !scorecard.innings) return { playerPoints: [], topPerformers: {} };
+
+  const playerStatsMap = new Map();
+
+  scorecard.innings.forEach(inn => {
+    // 🏏 Batting
+    inn.batting.forEach(bat => {
+      const pid = bat.playerId?.toString();
+      if (!pid) return;
+      if (!playerStatsMap.has(pid)) {
+        playerStatsMap.set(pid, {
+          name: bat.playerName,
+          runs: 0,
+          wickets: 0,
+          points: 0
+        });
+      }
+      const ps = playerStatsMap.get(pid);
+      ps.runs += bat.runs;
+
+      // ✅ Run-based proportional points (0.5 per run)
+      ps.points += bat.runs * 0.5;
+
+      // ✅ Bonus points
+      if (bat.runs >= 50) ps.points += 4;
+      if (bat.runs >= 100) ps.points += 8;
+      ps.points += (bat.fours || 0) + (bat.sixes || 0) * 2;
+    });
+
+    // 🎯 Bowling
+    inn.bowling.forEach(bowl => {
+      const pid = bowl.playerId?.toString();
+      if (!pid) return;
+      if (!playerStatsMap.has(pid)) {
+        playerStatsMap.set(pid, {
+          name: bowl.playerName,
+          runs: 0,
+          wickets: 0,
+          points: 0
+        });
+      }
+      const ps = playerStatsMap.get(pid);
+      ps.wickets += bowl.wickets;
+
+      // ✅ Bowling points
+      ps.points += bowl.wickets * 10;
+      if (bowl.wickets >= 3) ps.points += 4;
+      if (bowl.wickets >= 5) ps.points += 8;
+      if (bowl.economy && bowl.economy <= 4) ps.points += 4;
+    });
+  });
+
+  const allPlayers = Array.from(playerStatsMap.values());
+
+  // 🏆 Identify top performers
+  const bestBatsman = allPlayers.reduce((max, p) => (p.runs > (max?.runs || 0) ? p : max), null);
+  const bestBowler = allPlayers.reduce((max, p) => (p.wickets > (max?.wickets || 0) ? p : max), null);
+  const bestAllRounder = allPlayers.reduce((best, p) => {
+    const score = (p.runs >= 30 ? p.runs / 10 : 0) + (p.wickets * 5);
+    const bestScore = (best ? (best.runs / 10 + best.wickets * 5) : 0);
+    return score > bestScore ? p : best;
+  }, null);
+
+  // 🔢 Sort players by points
+  const sortedPlayers = allPlayers.sort((a, b) => b.points - a.points);
+
+  // 🧾 Format player points section
+  const playerPoints = sortedPlayers.map((p, i) => ({
+    rank: i + 1,
+    player: p.name,
+    runs: p.runs,
+    wickets: p.wickets,
+    points: parseFloat(p.points.toFixed(1))
+  }));
+
+  // 🎯 Top Performers section
+  const topPerformers = {
+    bestBatsman: bestBatsman ? { player: bestBatsman.name, runs: bestBatsman.runs } : null,
+    bestBowler: bestBowler ? { player: bestBowler.name, wickets: bestBowler.wickets } : null,
+    bestAllRounder: bestAllRounder ? { player: bestAllRounder.name, runs: bestAllRounder.runs, wickets: bestAllRounder.wickets } : null
+  };
+
+  // 👑 Final structure
+  return {
+    playerPoints,
+    topPerformers
+  };
+};
+
+
     const scorecard = generateScorecard();
+    const mvpLeaderboard = calculateMVPLeaderboard(scorecard);
 
     // ✅ FINAL RESPONSE
     return res.status(200).json({
@@ -1690,6 +1688,7 @@ export const getSingleMatchById = async (req, res) => {
         team2: team2WithStatus,
         scorecard: scorecard,
         liveData: liveData,
+        mvpLeaderboard, // 👈 contains both "Player Points" + "Top Performers"
         currentPlayers: {
           striker: currentBatsmenStats.striker,
           nonStriker: currentBatsmenStats.nonStriker,
@@ -2114,6 +2113,22 @@ export const updateLiveScore = async (req, res) => {
       return res.status(404).json({ success: false, message: "Match not found" });
     }
 
+    // ✅ OVER HISTORY FORMATTING FUNCTION
+    const getFormattedOverHistory = (overHistory) => {
+      if (!overHistory || overHistory.length === 0) return [];
+      
+      return overHistory.map(over => {
+        const validBalls = over.balls.filter(ball => ball && typeof ball.ballNumber !== 'undefined');
+        const ballNumbers = validBalls.map(ball => ball.ballNumber).sort((a, b) => a - b);
+        
+        if (ballNumbers.length === 0) {
+          return `Over ${over.overNumber}: No balls`;
+        }
+        
+        return `Over ${over.overNumber}: ${over.runs} runs - ${ballNumbers.join(', ')}`;
+      });
+    };
+
     // ✅ 1. MATCH STATUS UPDATE
     if (matchStatus) {
       match.status = matchStatus;
@@ -2124,14 +2139,21 @@ export const updateLiveScore = async (req, res) => {
       }
       
       await match.save();
+      
+      // ✅ FORMATTED OVER HISTORY SEND KARO
+      const currentInningsIndex = innings - 1;
+      const scoreData = match.scores[currentInningsIndex];
+      const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
+      
       return res.status(200).json({
         success: true,
         message: `Match status updated to ${matchStatus}`,
-        match: match
+        match: match,
+        overHistory: formattedOverHistory
       });
     }
 
-    // ✅ 2. INNING STATUS UPDATE - RETURN HATA DIYA
+    // ✅ 2. INNING STATUS UPDATE
     if (inningStatus) {
       console.log(`🔄 Inning status update requested: ${inningStatus}`);
       
@@ -2235,6 +2257,22 @@ export const updateLiveScore = async (req, res) => {
         
         console.log(`🎯 Batting Team: ${battingTeam}, Bowling Team: ${bowlingTeam}`);
         
+        // ✅ FIX: TUMHARE PAYLOAD KE STRIKER/NON-STRIKER/BOWLER USE KARO
+        if (striker) {
+          match.currentStriker = striker;
+          console.log(`🎯 Striker set from payload: ${striker}`);
+        }
+        
+        if (nonStriker) {
+          match.nonStriker = nonStriker;
+          console.log(`🎯 Non-Striker set from payload: ${nonStriker}`);
+        }
+        
+        if (bowler) {
+          match.currentBowler = bowler;
+          console.log(`🎯 Bowler set from payload: ${bowler}`);
+        }
+        
         const battingTeamData = await Team.findById(battingTeam);
         if (battingTeamData) {
           console.log(`🔄 Resetting batting team: ${battingTeamData.teamName}`);
@@ -2244,17 +2282,21 @@ export const updateLiveScore = async (req, res) => {
             status: "Yet to Bat"
           }));
           
-          if (battingTeamData.players.length >= 2) {
-            battingTeamData.players[0].status = "Batting (Striker)";
-            battingTeamData.players[1].status = "Batting (Non-Striker)";
-            
-            // ✅ YAHAN DEFAULT SET KARDO, BAAD MEIN OVERRIDE HO JAYEGA
-            match.currentStriker = battingTeamData.players[0]._id;
-            match.nonStriker = battingTeamData.players[1]._id;
-            
-            console.log(`🎯 Openers set: Striker - ${match.currentStriker}, Non-Striker - ${match.nonStriker}`);
-          } else {
-            console.log(`❌ Not enough players in batting team`);
+          // ✅ FIX: TUMHARE PAYLOAD KE STRIKER/NON-STRIKER KO SET KARO
+          if (striker) {
+            const strikerPlayer = battingTeamData.players.find(p => p._id.toString() === striker.toString());
+            if (strikerPlayer) {
+              strikerPlayer.status = "Batting (Striker)";
+              console.log(`🎯 Striker status updated: ${striker}`);
+            }
+          }
+          
+          if (nonStriker) {
+            const nonStrikerPlayer = battingTeamData.players.find(p => p._id.toString() === nonStriker.toString());
+            if (nonStrikerPlayer) {
+              nonStrikerPlayer.status = "Batting (Non-Striker)";
+              console.log(`🎯 Non-Striker status updated: ${nonStriker}`);
+            }
           }
           
           await battingTeamData.save();
@@ -2272,13 +2314,13 @@ export const updateLiveScore = async (req, res) => {
             status: "Fielding"
           }));
           
-          if (bowlingTeamData.players.length > 0) {
-            bowlingTeamData.players[0].status = "Bowling";
-            // ✅ YAHAN DEFAULT SET KARDO, BAAD MEIN OVERRIDE HO JAYEGA
-            match.currentBowler = bowlingTeamData.players[0]._id;
-            console.log(`🎯 Opening bowler set: ${match.currentBowler}`);
-          } else {
-            console.log(`❌ No players in bowling team`);
+          // ✅ FIX: TUMHARE PAYLOAD KE BOWLER KO SET KARO
+          if (bowler) {
+            const bowlerPlayer = bowlingTeamData.players.find(p => p._id.toString() === bowler.toString());
+            if (bowlerPlayer) {
+              bowlerPlayer.status = "Bowling";
+              console.log(`🎯 Bowler status updated: ${bowler}`);
+            }
           }
           
           await bowlingTeamData.save();
@@ -2292,8 +2334,20 @@ export const updateLiveScore = async (req, res) => {
       
       await match.save();
       
-      // ❌ RETURN STATEMENT COMMENT OUT KAR DIYA
+      // ✅ FORMATTED OVER HISTORY SEND KARO
+      const currentInningsIndex = innings - 1;
+      const scoreData = match.scores[currentInningsIndex];
+      const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
+      
       console.log(`✅ Inning status updated to ${inningStatus}, continuing with player updates...`);
+      
+      return res.status(200).json({
+        success: true,
+        message: `Inning status updated to ${inningStatus}`,
+        match: match,
+        overHistory: formattedOverHistory,
+        target: match.target
+      });
     }
 
     // ✅ 3. SWAP STRIKER
@@ -2325,10 +2379,16 @@ export const updateLiveScore = async (req, res) => {
       
       await match.save();
       
+      // ✅ FORMATTED OVER HISTORY SEND KARO
+      const currentInningsIndex = innings - 1;
+      const scoreData = match.scores[currentInningsIndex];
+      const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
+      
       return res.status(200).json({
         success: true,
         message: "Striker swapped successfully",
-        match: match
+        match: match,
+        overHistory: formattedOverHistory
       });
     }
 
@@ -2358,16 +2418,820 @@ export const updateLiveScore = async (req, res) => {
       
       await match.save();
       
+      // ✅ FORMATTED OVER HISTORY SEND KARO
+      const currentInningsIndex = innings - 1;
+      const scoreData = match.scores[currentInningsIndex];
+      const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
+      
       return res.status(200).json({
         success: true,
         message: "Bowler changed successfully",
-        match: match
+        match: match,
+        overHistory: formattedOverHistory
       });
     }
 
-    // ✅ 5. DIRECT PLAYER UPDATES (Agar inningStatus ke saath aaye hain)
-    let playersUpdated = false;
+    // ✅ 5. UNDO LAST BALL
+    if (undoLastBall) {
+      console.log(`⏪ Undo last ball requested`);
+      
+      const scoreData = match.scores[innings - 1];
+      if (!scoreData) {
+        return res.status(400).json({
+          success: false,
+          message: "No innings data found to undo"
+        });
+      }
+
+      // Check if there are any balls to undo
+      if (scoreData.currentOver.balls.length === 0 && scoreData.overHistory.length === 0) {
+        return res.status(400).json({
+          success: false,
+          message: "No balls to undo"
+        });
+      }
+
+      let lastBall;
+      
+      // Current over se last ball lo
+      if (scoreData.currentOver.balls.length > 0) {
+        lastBall = scoreData.currentOver.balls.pop();
+      } 
+      // Agar current over empty hai, to last over se ball lo
+      else if (scoreData.overHistory.length > 0) {
+        const lastOver = scoreData.overHistory[scoreData.overHistory.length - 1];
+        if (lastOver.balls.length > 0) {
+          lastBall = lastOver.balls.pop();
+          
+          // Agar last over empty ho gaya, to use remove karo
+          if (lastOver.balls.length === 0) {
+            scoreData.overHistory.pop();
+          }
+        }
+      }
+
+      if (!lastBall) {
+        return res.status(400).json({
+          success: false,
+          message: "No ball found to undo"
+        });
+      }
+
+      console.log(`⏪ Undoing ball:`, lastBall);
+
+      // ✅ RUNS UNDO KARO
+      let runsToSubtract = lastBall.runs || 0;
+      
+      if (lastBall.extraType === 'noball') {
+        runsToSubtract += 1;
+      } else if (lastBall.extraType === 'wide') {
+        runsToSubtract += 1;
+      }
+
+      scoreData.runs -= runsToSubtract;
+      match.runs = scoreData.runs;
+
+      // ✅ WICKET UNDO KARO
+      if (lastBall.wicket) {
+        scoreData.wickets -= 1;
+        match.wickets = scoreData.wickets;
+
+        // Players history se wicket undo karo
+        const inningsHistory = match.playersHistory.find(inn => inn.innings === innings);
+        if (inningsHistory) {
+          const playersHistoryThisInnings = inningsHistory.players;
+          
+          if (lastBall.striker) {
+            const strikerStats = playersHistoryThisInnings.find(p => 
+              p.playerId && p.playerId.toString() === lastBall.striker.toString()
+            );
+            if (strikerStats) {
+              strikerStats.isOut = false;
+              strikerStats.dismissals = "";
+              if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
+                strikerStats.balls -= 1;
+              }
+            }
+          }
+
+          if (lastBall.bowler && lastBall.dismissalType && 
+              ['bowled', 'caught', 'lbw', 'stumped', 'hitwicket'].includes(lastBall.dismissalType)) {
+            const bowlerStats = playersHistoryThisInnings.find(p => 
+              p.playerId && p.playerId.toString() === lastBall.bowler.toString()
+            );
+            if (bowlerStats) {
+              bowlerStats.wickets -= 1;
+            }
+          }
+
+          if (lastBall.newBatsman) {
+            const newBatsmanStats = playersHistoryThisInnings.find(p => 
+              p.playerId && p.playerId.toString() === lastBall.newBatsman.toString()
+            );
+            if (newBatsmanStats && newBatsmanStats.runs === 0 && newBatsmanStats.balls === 0) {
+              inningsHistory.players = playersHistoryThisInnings.filter(p => 
+                p.playerId.toString() !== lastBall.newBatsman.toString()
+              );
+            }
+          }
+        }
+
+        // Team schema mein player status undo karo
+        for (let teamId of [match.team1, match.team2]) {
+          const team = await Team.findById(teamId);
+          if (!team) continue;
+
+          team.players = team.players.map((player) => {
+            const playerId = player._id.toString();
+
+            if (lastBall.striker && playerId === lastBall.striker.toString()) {
+              return { ...player.toObject(), status: "Batting (Striker)" };
+            }
+            else if (lastBall.newBatsman && playerId === lastBall.newBatsman.toString()) {
+              return { ...player.toObject(), status: "Fielding" };
+            }
+            return player;
+          });
+
+          await team.save();
+        }
+
+        match.currentStriker = lastBall.striker;
+      }
+
+      // ✅ PLAYER STATS UNDO KARO
+      const inningsHistory = match.playersHistory.find(inn => inn.innings === innings);
+      if (inningsHistory) {
+        const playersHistoryThisInnings = inningsHistory.players;
+
+        if (lastBall.striker && !lastBall.wicket) {
+          const strikerStats = playersHistoryThisInnings.find(p => 
+            p.playerId && p.playerId.toString() === lastBall.striker.toString()
+          );
+          if (strikerStats) {
+            strikerStats.runs -= (lastBall.runs || 0);
+            if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
+              strikerStats.balls -= 1;
+            }
+            if (lastBall.runs === 4) strikerStats.fours -= 1;
+            if (lastBall.runs === 6) strikerStats.sixes -= 1;
+          }
+        }
+
+        if (lastBall.bowler) {
+          const bowlerStats = playersHistoryThisInnings.find(p => 
+            p.playerId && p.playerId.toString() === lastBall.bowler.toString()
+          );
+          if (bowlerStats) {
+            let runsConcededToSubtract = lastBall.runs || 0;
+            
+            if (lastBall.extraType === 'noball') {
+              runsConcededToSubtract += 1;
+              bowlerStats.noBalls -= 1;
+            } else if (lastBall.extraType === 'wide') {
+              runsConcededToSubtract += 1;
+              bowlerStats.wides -= 1;
+            }
+            
+            bowlerStats.runsConceded -= runsConcededToSubtract;
+            
+            if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
+              bowlerStats.balls -= 1;
+            }
+          }
+        }
+      }
+
+      // ✅ OVER MANAGEMENT UNDO
+      let runsToSubtractFromOver = lastBall.runs || 0;
+      if (lastBall.extraType === 'noball' || lastBall.extraType === 'wide') {
+        runsToSubtractFromOver += 1;
+      }
+      scoreData.currentOver.runs -= runsToSubtractFromOver;
+      
+      if (lastBall.wicket) {
+        scoreData.currentOver.wickets -= 1;
+      }
+
+      // Over history update karo
+      let currentOverInHistory = scoreData.overHistory.find(over => 
+        over.overNumber === scoreData.currentOver.overNumber
+      );
+      if (currentOverInHistory) {
+        currentOverInHistory.runs -= runsToSubtractFromOver;
+        if (lastBall.wicket) currentOverInHistory.wickets -= 1;
+        if (lastBall.extraType === 'wide') currentOverInHistory.wides -= 1;
+        if (lastBall.extraType === 'noball') currentOverInHistory.noBalls -= 1;
+      }
+
+      // ✅ OVERS COUNT UNDO
+      let [ov, b] = scoreData.overs.toString().split(".").map(Number);
+      
+      if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
+        b -= 1;
+      }
+
+      if (b < 0) {
+        ov -= 1;
+        b = 5;
+      }
+
+      scoreData.overs = parseFloat(`${ov}.${b}`);
+      match.overs = scoreData.overs;
+
+      // ✅ RUN RATE RECALCULATE KARO
+      scoreData.runRate = scoreData.overs > 0 ? 
+        parseFloat((scoreData.runs / scoreData.overs).toFixed(2)) : 0;
+      match.runRate = scoreData.runRate;
+
+      // ✅ COMMENTARY UNDO
+      if (scoreData.commentary.length > 0) {
+        scoreData.commentary.pop();
+      }
+      if (match.commentary.length > 0) {
+        match.commentary.pop();
+      }
+
+      // ✅ MONGOOSE KO BATAYO KI SAB KUCH CHANGE HUA HAI
+      match.markModified('scores');
+      match.markModified('playersHistory');
+      match.markModified('runs');
+      match.markModified('wickets');
+      match.markModified('overs');
+      match.markModified('runRate');
+      match.markModified('currentStriker');
+      match.markModified('commentary');
+
+      console.log(`⏪ Undo completed. New score: ${scoreData.runs}/${scoreData.wickets} in ${scoreData.overs} overs`);
+      
+      const savedMatch = await match.save();
+      
+      // ✅ FORMATTED OVER HISTORY SEND KARO
+      const formattedOverHistory = getFormattedOverHistory(scoreData.overHistory);
+      
+      return res.status(200).json({
+        success: true,
+        message: "Last ball undone successfully",
+        match: savedMatch,
+        overHistory: formattedOverHistory
+      });
+    }
+
+    // ✅ 6. MAIN BALL UPDATE LOGIC (IMPORTANT: DIRECT PLAYER UPDATES SE PEHLE)
+    if (ballUpdate) {
+      console.log(`🎯 Ball update requested for innings ${innings}`);
+      
+      const currentInningsIndex = innings - 1;
+      const isSecondInnings = innings === 2;
+      
+      console.log(`🎯 Ball update for innings ${innings}, Second innings: ${isSecondInnings}, Target: ${match.target}`);
+
+      // ✅ FIX: FIRST TIME BALL UPDATE KE LIYE COMPLETE INITIALIZATION
+      // Current innings ensure karo
+      if (!match.scores[currentInningsIndex]) {
+        console.log(`🆕 Creating new innings data for innings ${innings}`);
+        match.scores[currentInningsIndex] = {
+          innings: innings,
+          runs: 0,
+          wickets: 0,
+          overs: 0,
+          runRate: 0,
+          currentOver: { overNumber: 1, runs: 0, wickets: 0, balls: [] },
+          overHistory: [],
+          commentary: []
+        };
+      }
+
+      const scoreData = match.scores[currentInningsIndex];
+
+      // ✅ FIX: FIRST TIME PLAYERS HISTORY INITIALIZATION
+      // PlayersHistory ensure karo
+      let inningsHistory = match.playersHistory.find(inn => inn.innings === innings);
+      if (!inningsHistory) {
+        console.log(`🆕 Creating new players history for innings ${innings}`);
+        inningsHistory = {
+          innings: innings,
+          players: []
+        };
+        match.playersHistory.push(inningsHistory);
+      }
+
+      const playersHistoryThisInnings = inningsHistory.players;
+
+      // ✅ FIX: FIRST TIME STRIKER/NON-STRIKER/BOWLER INITIALIZATION
+      if (striker && !match.currentStriker) {
+        console.log(`🆕 Setting initial striker: ${striker}`);
+        match.currentStriker = striker;
+      }
+      
+      if (nonStriker && !match.nonStriker) {
+        console.log(`🆕 Setting initial non-striker: ${nonStriker}`);
+        match.nonStriker = nonStriker;
+      }
+      
+      if (bowler && !match.currentBowler) {
+        console.log(`🆕 Setting initial bowler: ${bowler}`);
+        match.currentBowler = bowler;
+      }
+
+      // ✅ SIMPLER SOLUTION: Ball number calculation based on ball count
+      const getNextBallNumber = () => {
+        const currentBalls = scoreData.currentOver.balls;
+        
+        // ✅ SIMPLE FIX: Just return current balls count + 1
+        const nextBall = currentBalls.length + 1;
+        console.log(`🎯 Current balls: ${currentBalls.length}, Next ball number: ${nextBall}`);
+        return nextBall;
+      };
+
+      // ✅ IMPROVED PLAYER UPDATE FUNCTION WITH VALIDATION
+     // ✅ IMPROVED PLAYER UPDATE FUNCTION WITH VALIDATION
+const updatePlayerStats = (playerId, updates) => {
+  if (!playerId) {
+    console.log(`⚠️ Player ID undefined, skipping update`);
+    return null;
+  }
+
+  let playerStats = playersHistoryThisInnings.find(p => 
+    p.playerId && p.playerId.toString() === playerId.toString()
+  );
+
+  if (!playerStats) {
+    playerStats = {
+      playerId: playerId,
+      runs: 0, balls: 0, fours: 0, sixes: 0, strikeRate: 0,
+      wickets: 0, overs: 0, runsConceded: 0, maidens: 0, economy: 0,
+      wides: 0, noBalls: 0, dismissals: "", isOut: false
+    };
+    playersHistoryThisInnings.push(playerStats);
+    console.log(`🆕 New player added to history: ${playerId}`);
+  }
+
+  // ✅ STATS UPDATE - ONLY ONCE PER BALL
+  if (updates.runs !== undefined) {
+    playerStats.runs += updates.runs;
+    if (updates.runs === 4) playerStats.fours += 1;
+    if (updates.runs === 6) playerStats.sixes += 1;
+    console.log(`📈 Player ${playerId} runs: +${updates.runs} = ${playerStats.runs}`);
+  }
+  
+  if (updates.balls !== undefined && updates.balls > 0) {
+    playerStats.balls += updates.balls;
+    console.log(`📈 Player ${playerId} balls: +${updates.balls} = ${playerStats.balls}`);
+  }
+  
+  if (updates.runsConceded !== undefined) {
+    playerStats.runsConceded += updates.runsConceded;
+    console.log(`📈 Player ${playerId} runsConceded: +${updates.runsConceded} = ${playerStats.runsConceded}`);
+  }
+  
+  if (updates.wickets !== undefined) {
+    playerStats.wickets += updates.wickets;
+    console.log(`📈 Player ${playerId} wickets: +${updates.wickets} = ${playerStats.wickets}`);
+  }
+  
+  if (updates.overs !== undefined) {
+    playerStats.overs += updates.overs;
+    console.log(`📈 Player ${playerId} overs: +${updates.overs} = ${playerStats.overs}`);
+  }
+  
+  if (updates.wides !== undefined) {
+    playerStats.wides += updates.wides;
+  }
+  
+  if (updates.noBalls !== undefined) {
+    playerStats.noBalls += updates.noBalls;
+  }
+  
+  if (updates.dismissal) {
+    playerStats.dismissals = updates.dismissal;
+  }
+  
+  if (updates.isOut !== undefined) {
+    playerStats.isOut = updates.isOut;
+  }
+
+  // ✅ RATES CALCULATE KARO
+  if (playerStats.balls > 0) {
+    playerStats.strikeRate = parseFloat(((playerStats.runs / playerStats.balls) * 100).toFixed(2));
+  }
+  if (playerStats.overs > 0) {
+    playerStats.economy = parseFloat((playerStats.runsConceded / playerStats.overs).toFixed(2));
+  }
+
+  console.log(`✅ Player ${playerId} updated - R:${playerStats.runs}, B:${playerStats.balls}, O:${playerStats.overs}, RC:${playerStats.runsConceded}`);
+  return playerStats;
+};
+
+// ✅ FIXED: BALL UPDATE LOGIC - OVERHISTORY KE ACCORDING
+let ballRuns = Number(runs) || 0;
+let ballWicket = (Number(wickets) || 0) > 0;
+let isLegalDelivery = true;
+let commentaryLine = "";
+
+if (extraType === 'wide' || extraType === 'noball') {
+  isLegalDelivery = false;
+}
+
+// ✅ RUNS ADD KARO - OVERHISTORY KE ACCORDING
+if (runs !== undefined) {
+  let runsToAdd = ballRuns;
+  
+  if (extraType === 'noball') {
+    runsToAdd = ballRuns + 1;
+    console.log(`🎯 No Ball: ${ballRuns} boundary runs + 1 penalty = ${runsToAdd} total runs`);
+  }
+  else if (extraType === 'wide') {
+    runsToAdd = ballRuns + 1;
+    console.log(`🎯 Wide: ${ballRuns} extra runs + 1 penalty = ${runsToAdd} total runs`);
+  }
+
+  scoreData.runs += runsToAdd;
+  match.runs = scoreData.runs;
+
+  // ✅ FIX: ONLY ONE TIME PLAYER STATS UPDATE KARO
+  if (!extraType) {
+    // ✅ NORMAL BALL - STRIKER KO RUNS AUR BALLS
+    if (striker) {
+      updatePlayerStats(striker, { 
+        runs: ballRuns, 
+        balls: 1
+      });
+    }
+    // ✅ BOWLER KO RUNS CONCEDED AUR BALLS
+    if (bowler) {
+      updatePlayerStats(bowler, { 
+        runsConceded: ballRuns, 
+        balls: 1
+      });
+    }
     
+    if (ballRuns === 0) commentaryLine = "Dot ball";
+    else if (ballRuns === 4) commentaryLine = "FOUR!";
+    else if (ballRuns === 6) commentaryLine = "SIX!";
+    else commentaryLine = `${ballRuns} run${ballRuns > 1 ? 's' : ''}`;
+  }
+  else {
+    switch (extraType) {
+      case 'wide':
+        if (bowler) {
+          updatePlayerStats(bowler, { 
+            runsConceded: runsToAdd,
+            wides: 1
+          });
+        }
+        commentaryLine = `WIDE! ${runsToAdd} run${runsToAdd > 1 ? 's' : ''}${ballRuns > 0 ? ` (${ballRuns} boundary)` : ''}`;
+        break;
+        
+      case 'noball':
+        if (bowler) {
+          updatePlayerStats(bowler, { 
+            runsConceded: runsToAdd,
+            noBalls: 1
+          });
+        }
+        if (striker && ballRuns > 0) {
+          updatePlayerStats(striker, { 
+            runs: ballRuns
+          });
+        }
+        commentaryLine = `NO BALL! ${runsToAdd} run${runsToAdd > 1 ? 's' : ''}${ballRuns > 0 ? ` (${ballRuns} boundary)` : ''}`;
+        break;
+        
+      case 'bye':
+        if (bowler && isLegalDelivery) {
+          updatePlayerStats(bowler, { 
+            balls: 1
+          });
+        }
+        commentaryLine = `${ballRuns} BYE${ballRuns > 1 ? 's' : ''}`;
+        break;
+      case 'legbye':
+        if (bowler && isLegalDelivery) {
+          updatePlayerStats(bowler, { 
+            balls: 1
+          });
+        }
+        commentaryLine = `${ballRuns} LEG BYE${ballRuns > 1 ? 's' : ''}`;
+        break;
+    }
+  }
+}
+
+      // ✅ WICKET ADD KARO
+   if (ballWicket) {
+  scoreData.wickets += 1;
+  match.wickets = scoreData.wickets;
+
+  console.log(`🎯 Wicket taken! Dismissal Type: ${dismissalType}, Striker: ${striker}`);
+
+  if (striker) {
+    updatePlayerStats(striker, { 
+      dismissal: dismissalType, 
+      balls: isLegalDelivery ? 1 : 0,
+      isOut: true 
+    });
+
+    switch(dismissalType) {
+      case 'bowled':
+        commentaryLine = `BOWLED! Clean bowled!`;
+        break;
+      case 'caught':
+        commentaryLine = `CAUGHT! Brilliant catch!`;
+        break;
+      case 'lbw':
+        commentaryLine = `LBW! Plumb in front!`;
+        break;
+      case 'runout':
+        commentaryLine = `RUN OUT! Direct hit!`;
+        break;
+      case 'stumped':
+        commentaryLine = `STUMPED! Quick work by the keeper!`;
+        break;
+      case 'hitwicket':
+        commentaryLine = `HIT WICKET! Unfortunate dismissal!`;
+        break;
+      default:
+        commentaryLine = `OUT! ${dismissalType}`;
+    }
+  }
+
+         if (bowler && isLegalDelivery && 
+      ['bowled', 'caught', 'lbw', 'stumped', 'hitwicket'].includes(dismissalType)) {
+    updatePlayerStats(bowler, { wickets: 1 });
+    console.log(`🎯 Wicket credited to bowler: ${bowler}`);
+  }
+
+  if (newBatsman) {
+    match.currentStriker = newBatsman;
+    updatePlayerStats(newBatsman, { runs: 0, balls: 0, isOut: false });
+    commentaryLine += ` New batsman arrives.`;
+    console.log(`🔄 New batsman: ${newBatsman}`);
+  } else {
+    match.currentStriker = null;
+  }
+
+
+        console.log(`🔄 Updating team schema for wicket...`);
+        for (let teamId of [match.team1, match.team2]) {
+          const team = await Team.findById(teamId);
+          if (!team) continue;
+
+          team.players = team.players.map((player) => {
+            const playerId = player._id.toString();
+
+            if (striker && playerId === striker.toString()) {
+              console.log(`🎯 Marking player as OUT: ${playerId}`);
+              return { ...player.toObject(), status: "Out" };
+            }
+            else if (newBatsman && playerId === newBatsman.toString()) {
+              console.log(`🔄 New batsman status: Batting (Striker) - ${playerId}`);
+              return { ...player.toObject(), status: "Batting (Striker)" };
+            }
+            return player;
+          });
+
+          await team.save();
+          console.log(`✅ Team ${team.teamName} updated successfully`);
+        }
+      }
+
+      // ✅ FIXED: BALL NUMBER CALCULATION
+      const nextBallNumber = getNextBallNumber();
+      console.log(`🎯 Final Ball Number: ${nextBallNumber}, Extra Type: ${extraType}, Legal Delivery: ${isLegalDelivery}`);
+
+      // ✅ OVER MANAGEMENT
+      const ballData = {
+        ballNumber: nextBallNumber,
+        runs: ballRuns,
+        wicket: ballWicket,
+        extraType: extraType,
+        striker: striker,
+        bowler: bowler,
+        newBatsman: ballWicket ? newBatsman : null,
+        dismissalType: ballWicket ? dismissalType : null,
+        timestamp: new Date(),
+        commentary: commentaryLine
+      };
+
+      // ✅ ONLY ONCE PUSH KARO CURRENT OVER MEIN
+      scoreData.currentOver.balls.push(ballData);
+
+      if (extraType === 'noball') {
+        scoreData.currentOver.runs += (ballRuns + 1);
+      } else if (extraType === 'wide') {
+        scoreData.currentOver.runs += (ballRuns + 1);
+      } else {
+        scoreData.currentOver.runs += ballRuns;
+      }
+      
+      if (ballWicket) scoreData.currentOver.wickets += 1;
+
+      // ✅ OVER HISTORY UPDATE - DIRECT COPY CURRENT OVER
+      const overIndex = scoreData.overHistory.findIndex(over => 
+        over.overNumber === scoreData.currentOver.overNumber
+      );
+
+      if (overIndex === -1) {
+        scoreData.overHistory.push({
+          ...scoreData.currentOver,
+          balls: [...scoreData.currentOver.balls],
+          wides: scoreData.currentOver.balls.filter(b => b.extraType === 'wide').length,
+          noBalls: scoreData.currentOver.balls.filter(b => b.extraType === 'noball').length
+        });
+      } else {
+        scoreData.overHistory[overIndex] = {
+          ...scoreData.currentOver,
+          balls: [...scoreData.currentOver.balls],
+          wides: scoreData.currentOver.balls.filter(b => b.extraType === 'wide').length,
+          noBalls: scoreData.currentOver.balls.filter(b => b.extraType === 'noball').length
+        };
+      }
+
+      console.log(`✅ Over History Updated: Over ${scoreData.currentOver.overNumber} - ${scoreData.currentOver.balls.length} balls`);
+
+      // ✅ OVERS COUNT UPDATE
+      let [ov, b] = scoreData.overs.toString().split(".").map(Number);
+      if (isNaN(ov)) ov = 0;
+      if (isNaN(b)) b = 0;
+
+      if (isLegalDelivery) {
+        b += 1;
+      }
+
+      // ✅ OVER COMPLETE?
+    if (b >= 6) {
+  console.log(`🎯 Over completed! Bowler: ${bowler}, Over: ${ov}.${b}`);
+  
+  if (bowler) {
+    updatePlayerStats(bowler, { overs: 1 });
+    
+    const currentOverRuns = scoreData.currentOver.runs;
+    if (currentOverRuns === 0) {
+      updatePlayerStats(bowler, { maidens: 1 });
+      console.log(`🎯 Maiden over for bowler: ${bowler}`);
+    }
+    
+    const bowlerStats = playersHistoryThisInnings.find(p => 
+      p.playerId && p.playerId.toString() === bowler.toString()
+    );
+    console.log(`📊 Bowler ${bowler} overs updated to: ${bowlerStats?.overs || 0}`);
+  }
+
+
+        ov += 1;
+        b = 0;
+        scoreData.currentOver = {
+          overNumber: ov + 1,
+          runs: 0,
+          wickets: 0,
+          balls: []
+        };
+
+        const overCommentary = `End of over ${ov}. Score: ${scoreData.runs}/${scoreData.wickets}`;
+        scoreData.commentary.push(overCommentary);
+        match.commentary.push(overCommentary);
+        
+        console.log(`🔄 Starting new over: ${ov + 1}`);
+      }
+
+      scoreData.overs = parseFloat(`${ov}.${b}`);
+      match.overs = scoreData.overs;
+
+      scoreData.runRate = scoreData.overs > 0 ? 
+        parseFloat((scoreData.runs / scoreData.overs).toFixed(2)) : 0;
+      match.runRate = scoreData.runRate;
+
+      // ✅ CURRENT PLAYERS UPDATE - FIXED FOR FIRST TIME
+      if (striker && !ballWicket) {
+        match.currentStriker = striker;
+        
+        for (let teamId of [match.team1, match.team2]) {
+          const team = await Team.findById(teamId);
+          if (!team) continue;
+
+          team.players = team.players.map((player) => {
+            const playerId = player._id.toString();
+
+            if (playerId === striker.toString()) {
+              return { ...player.toObject(), status: "Batting (Striker)" };
+            }
+            return player;
+          });
+
+          await team.save();
+        }
+      }
+      
+      if (nonStriker) {
+        match.nonStriker = nonStriker;
+        
+        // ✅ FIX: NON-STRIKER KO BHI PLAYERS HISTORY MEIN ADD KARO
+        updatePlayerStats(nonStriker, { runs: 0, balls: 0 });
+        
+        for (let teamId of [match.team1, match.team2]) {
+          const team = await Team.findById(teamId);
+          if (!team) continue;
+
+          team.players = team.players.map((player) => {
+            const playerId = player._id.toString();
+
+            if (playerId === nonStriker.toString()) {
+              return { ...player.toObject(), status: "Batting (Non-Striker)" };
+            }
+            return player;
+          });
+
+          await team.save();
+        }
+      }
+      
+      if (bowler && !changeBowler) {
+        match.currentBowler = bowler;
+        
+        for (let teamId of [match.team1, match.team2]) {
+          const team = await Team.findById(teamId);
+          if (!team) continue;
+
+          team.players = team.players.map((player) => {
+            const playerId = player._id.toString();
+
+            if (playerId === bowler.toString()) {
+              return { ...player.toObject(), status: "Bowling" };
+            }
+            return player;
+          });
+
+          await team.save();
+        }
+      }
+
+      // ✅ COMMENTARY ADD KARO
+      if (commentaryLine) {
+        scoreData.commentary.push(commentaryLine);
+        match.commentary.push(commentaryLine);
+      }
+
+      // ✅ MONGOOSE KO BATAYO KI SAB KUCH CHANGE HUA HAI
+      match.markModified('scores');
+      match.markModified('playersHistory');
+      match.markModified('runs');
+      match.markModified('wickets');
+      match.markModified('overs');
+      match.markModified('runRate');
+      match.markModified('currentStriker');
+      match.markModified('nonStriker');
+      match.markModified('currentBowler');
+      match.markModified('commentary');
+
+      console.log(`💾 Saving match data...`);
+      console.log(`📊 Final Score: ${scoreData.runs}/${scoreData.wickets} in ${scoreData.overs} overs`);
+      
+      // ✅ DEBUG OVER HISTORY
+      console.log(`📈 Current Over Balls:`, scoreData.currentOver.balls.map(b => `Ball ${b.ballNumber}: ${b.runs} runs`));
+      console.log(`📈 Over History:`, scoreData.overHistory.map(over => `Over ${over.overNumber}: ${over.balls.length} balls - ${over.balls.map(b => b.ballNumber).join(', ')}`));
+      
+      // ✅ DEBUG PLAYER STATS
+      console.log(`🔍 FINAL PLAYER STATS:`);
+      playersHistoryThisInnings.forEach(player => {
+        console.log(`   Player: ${player.playerId}, Runs: ${player.runs}, Balls: ${player.balls}, Overs: ${player.overs}, RunsConceded: ${player.runsConceded}`);
+      });
+      
+      if (bowler) {
+        const bowlerStats = playersHistoryThisInnings.find(p => 
+          p.playerId && p.playerId.toString() === bowler.toString()
+        );
+        if (bowlerStats) {
+          console.log(`🎯 Bowler Final Stats - Overs: ${bowlerStats.overs}, Runs: ${bowlerStats.runsConceded}, Wickets: ${bowlerStats.wickets}`);
+        }
+      }
+
+      const savedMatch = await match.save();
+      console.log(`✅ Match saved successfully!`);
+
+      // ✅ FORMATTED OVER HISTORY SEND KARO
+      const formattedOverHistory = getFormattedOverHistory(scoreData.overHistory);
+
+      const responseData = {
+        success: true,
+        message: "Ball updated successfully",
+        match: savedMatch,
+        overHistory: formattedOverHistory
+      };
+
+      if (isSecondInnings) {
+        responseData.target = match.target;
+        responseData.requiredRuns = Math.max(0, match.target - scoreData.runs);
+        responseData.remainingWickets = 10 - scoreData.wickets;
+        console.log(`🎯 Second innings update - Target: ${match.target}, Required: ${responseData.requiredRuns}`);
+      }
+
+      return res.status(200).json(responseData);
+    }
+
+    // ✅ 7. DIRECT PLAYER UPDATES (BALL UPDATE KE BAAD - ONLY IF NOT BALL UPDATE)
+    let playersUpdated = false;
+
     if (striker && striker !== match.currentStriker?.toString()) {
       console.log(`🔄 Updating striker from ${match.currentStriker} to ${striker}`);
       match.currentStriker = striker;
@@ -2384,7 +3248,6 @@ export const updateLiveScore = async (req, res) => {
           if (playerId === striker.toString()) {
             return { ...player.toObject(), status: "Batting (Striker)" };
           }
-          // Purane striker ko non-striker banao agar woh abhi bhi batting mein hai
           else if (player.status === "Batting (Striker)" && playerId !== striker.toString()) {
             return { ...player.toObject(), status: "Batting (Non-Striker)" };
           }
@@ -2436,7 +3299,6 @@ export const updateLiveScore = async (req, res) => {
           if (playerId === bowler.toString()) {
             return { ...player.toObject(), status: "Bowling" };
           }
-          // Purane bowler ko fielding mein bhejo
           else if (player.status === "Bowling" && playerId !== bowler.toString()) {
             return { ...player.toObject(), status: "Fielding" };
           }
@@ -2450,15 +3312,22 @@ export const updateLiveScore = async (req, res) => {
     
     if (playersUpdated) {
       await match.save();
+      
+      // ✅ FORMATTED OVER HISTORY SEND KARO
+      const currentInningsIndex = innings - 1;
+      const scoreData = match.scores[currentInningsIndex];
+      const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
+      
       return res.status(200).json({
         success: true,
         message: "Players updated successfully",
         match: match,
-        target: match.target
+        target: match.target,
+        overHistory: formattedOverHistory
       });
     }
 
-    // ✅ 6. STRIKER CHANGE (without wicket)
+    // ✅ 8. STRIKER CHANGE (without wicket)
     if (striker && newBatsman && !wickets) {
       console.log(`🔄 Changing striker from ${match.currentStriker} to ${newBatsman}`);
       
@@ -2472,11 +3341,9 @@ export const updateLiveScore = async (req, res) => {
         team.players = team.players.map((player) => {
           const playerId = player._id.toString();
 
-          // Purane striker ko fielding mein bhejo
           if (player.status === "Batting (Striker)") {
             return { ...player.toObject(), status: "Fielding" };
           }
-          // Naye striker ko batting status do
           else if (playerId === newBatsman.toString()) {
             return { ...player.toObject(), status: "Batting (Striker)" };
           }
@@ -2488,781 +3355,17 @@ export const updateLiveScore = async (req, res) => {
       
       await match.save();
       
+      // ✅ FORMATTED OVER HISTORY SEND KARO
+      const currentInningsIndex = innings - 1;
+      const scoreData = match.scores[currentInningsIndex];
+      const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
+      
       return res.status(200).json({
         success: true,
         message: "Striker changed successfully",
-        match: match
+        match: match,
+        overHistory: formattedOverHistory
       });
-    }
-
-    // ✅ 7. UNDO LAST BALL
-    if (undoLastBall) {
-      console.log(`⏪ Undo last ball requested`);
-      
-      const scoreData = match.scores[innings - 1];
-      if (!scoreData) {
-        return res.status(400).json({
-          success: false,
-          message: "No innings data found to undo"
-        });
-      }
-
-      // Check if there are any balls to undo
-      if (scoreData.currentOver.balls.length === 0 && scoreData.overHistory.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: "No balls to undo"
-        });
-      }
-
-      let lastBall;
-      
-      // Current over se last ball lo
-      if (scoreData.currentOver.balls.length > 0) {
-        lastBall = scoreData.currentOver.balls.pop();
-      } 
-      // Agar current over empty hai, to last over se ball lo
-      else if (scoreData.overHistory.length > 0) {
-        const lastOver = scoreData.overHistory[scoreData.overHistory.length - 1];
-        if (lastOver.balls.length > 0) {
-          lastBall = lastOver.balls.pop();
-          
-          // Agar last over empty ho gaya, to use remove karo
-          if (lastOver.balls.length === 0) {
-            scoreData.overHistory.pop();
-          }
-        }
-      }
-
-      if (!lastBall) {
-        return res.status(400).json({
-          success: false,
-          message: "No ball found to undo"
-        });
-      }
-
-      console.log(`⏪ Undoing ball:`, lastBall);
-
-      // ✅ RUNS UNDO KARO
-      let runsToSubtract = lastBall.runs || 0;
-      
-      // Extra type ke hisab se runs calculate karo
-      if (lastBall.extraType === 'noball') {
-        runsToSubtract += 1; // No ball penalty
-      } else if (lastBall.extraType === 'wide') {
-        runsToSubtract += 1; // Wide penalty
-      }
-
-      scoreData.runs -= runsToSubtract;
-      match.runs = scoreData.runs;
-
-      // ✅ WICKET UNDO KARO
-      if (lastBall.wicket) {
-        scoreData.wickets -= 1;
-        match.wickets = scoreData.wickets;
-
-        // Players history se wicket undo karo
-        const inningsHistory = match.playersHistory.find(inn => inn.innings === innings);
-        if (inningsHistory) {
-          const playersHistoryThisInnings = inningsHistory.players;
-          
-          // Striker ki wicket undo karo
-          if (lastBall.striker) {
-            const strikerStats = playersHistoryThisInnings.find(p => 
-              p.playerId && p.playerId.toString() === lastBall.striker.toString()
-            );
-            if (strikerStats) {
-              strikerStats.isOut = false;
-              strikerStats.dismissals = "";
-              // Ball count bhi adjust karo agar legal delivery thi
-              if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
-                strikerStats.balls -= 1;
-              }
-            }
-          }
-
-          // Bowler se wicket undo karo
-          if (lastBall.bowler && lastBall.dismissalType && 
-              ['bowled', 'caught', 'lbw', 'stumped', 'hitwicket'].includes(lastBall.dismissalType)) {
-            const bowlerStats = playersHistoryThisInnings.find(p => 
-              p.playerId && p.playerId.toString() === lastBall.bowler.toString()
-            );
-            if (bowlerStats) {
-              bowlerStats.wickets -= 1;
-            }
-          }
-
-          // New batsman ko remove karo
-          if (lastBall.newBatsman) {
-            const newBatsmanStats = playersHistoryThisInnings.find(p => 
-              p.playerId && p.playerId.toString() === lastBall.newBatsman.toString()
-            );
-            if (newBatsmanStats && newBatsmanStats.runs === 0 && newBatsmanStats.balls === 0) {
-              // Agar new batsman ne kuch nahi kiya, to use remove karo
-              inningsHistory.players = playersHistoryThisInnings.filter(p => 
-                p.playerId.toString() !== lastBall.newBatsman.toString()
-              );
-            }
-          }
-        }
-
-        // Team schema mein player status undo karo
-        for (let teamId of [match.team1, match.team2]) {
-          const team = await Team.findById(teamId);
-          if (!team) continue;
-
-          team.players = team.players.map((player) => {
-            const playerId = player._id.toString();
-
-            // Out player ko wapas batting mein le aao
-            if (lastBall.striker && playerId === lastBall.striker.toString()) {
-              return { ...player.toObject(), status: "Batting (Striker)" };
-            }
-            // New batsman ko fielding mein bhejo
-            else if (lastBall.newBatsman && playerId === lastBall.newBatsman.toString()) {
-              return { ...player.toObject(), status: "Fielding" };
-            }
-            return player;
-          });
-
-          await team.save();
-        }
-
-        // Striker ko wapas set karo
-        match.currentStriker = lastBall.striker;
-      }
-
-      // ✅ PLAYER STATS UNDO KARO
-      const inningsHistory = match.playersHistory.find(inn => inn.innings === innings);
-      if (inningsHistory) {
-        const playersHistoryThisInnings = inningsHistory.players;
-
-        // Striker stats undo
-        if (lastBall.striker && !lastBall.wicket) {
-          const strikerStats = playersHistoryThisInnings.find(p => 
-            p.playerId && p.playerId.toString() === lastBall.striker.toString()
-          );
-          if (strikerStats) {
-            strikerStats.runs -= (lastBall.runs || 0);
-            if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
-              strikerStats.balls -= 1;
-            }
-            // Four/Six undo
-            if (lastBall.runs === 4) strikerStats.fours -= 1;
-            if (lastBall.runs === 6) strikerStats.sixes -= 1;
-          }
-        }
-
-        // Bowler stats undo
-        if (lastBall.bowler) {
-          const bowlerStats = playersHistoryThisInnings.find(p => 
-            p.playerId && p.playerId.toString() === lastBall.bowler.toString()
-          );
-          if (bowlerStats) {
-            let runsConcededToSubtract = lastBall.runs || 0;
-            
-            if (lastBall.extraType === 'noball') {
-              runsConcededToSubtract += 1;
-              bowlerStats.noBalls -= 1;
-            } else if (lastBall.extraType === 'wide') {
-              runsConcededToSubtract += 1;
-              bowlerStats.wides -= 1;
-            }
-            
-            bowlerStats.runsConceded -= runsConcededToSubtract;
-            
-            // Legal delivery thi to ball count undo karo
-            if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
-              bowlerStats.balls -= 1;
-            }
-          }
-        }
-      }
-
-      // ✅ OVER MANAGEMENT UNDO
-      // Current over runs update karo
-      let runsToSubtractFromOver = lastBall.runs || 0;
-      if (lastBall.extraType === 'noball' || lastBall.extraType === 'wide') {
-        runsToSubtractFromOver += 1;
-      }
-      scoreData.currentOver.runs -= runsToSubtractFromOver;
-      
-      if (lastBall.wicket) {
-        scoreData.currentOver.wickets -= 1;
-      }
-
-      // Over history update karo
-      let currentOverInHistory = scoreData.overHistory.find(over => 
-        over.overNumber === scoreData.currentOver.overNumber
-      );
-      if (currentOverInHistory) {
-        currentOverInHistory.runs -= runsToSubtractFromOver;
-        if (lastBall.wicket) currentOverInHistory.wickets -= 1;
-        if (lastBall.extraType === 'wide') currentOverInHistory.wides -= 1;
-        if (lastBall.extraType === 'noball') currentOverInHistory.noBalls -= 1;
-      }
-
-      // ✅ OVERS COUNT UNDO
-      let [ov, b] = scoreData.overs.toString().split(".").map(Number);
-      
-      // Legal delivery thi to ball count kam karo
-      if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
-        b -= 1;
-      }
-
-      // Agar ball count negative hai, to previous over mein jao
-      if (b < 0) {
-        ov -= 1;
-        b = 5; // Previous over ki 5 balls
-      }
-
-      scoreData.overs = parseFloat(`${ov}.${b}`);
-      match.overs = scoreData.overs;
-
-      // ✅ RUN RATE RECALCULATE KARO
-      scoreData.runRate = scoreData.overs > 0 ? 
-        parseFloat((scoreData.runs / scoreData.overs).toFixed(2)) : 0;
-      match.runRate = scoreData.runRate;
-
-      // ✅ COMMENTARY UNDO - Last commentary remove karo
-      if (scoreData.commentary.length > 0) {
-        scoreData.commentary.pop();
-      }
-      if (match.commentary.length > 0) {
-        match.commentary.pop();
-      }
-
-      // ✅ MONGOOSE KO BATAYO KI SAB KUCH CHANGE HUA HAI
-      match.markModified('scores');
-      match.markModified('playersHistory');
-      match.markModified('runs');
-      match.markModified('wickets');
-      match.markModified('overs');
-      match.markModified('runRate');
-      match.markModified('currentStriker');
-      match.markModified('commentary');
-
-      console.log(`⏪ Undo completed. New score: ${scoreData.runs}/${scoreData.wickets} in ${scoreData.overs} overs`);
-      
-      const savedMatch = await match.save();
-      
-      return res.status(200).json({
-        success: true,
-        message: "Last ball undone successfully",
-        match: savedMatch
-      });
-    }
-
-    // ✅ 8. MAIN BALL UPDATE LOGIC
-    if (ballUpdate) {
-      // ✅ CURRENT INNINGS CHECK - AGAR SECOND INNINGS HAI TO TARGET SHOW KARO
-      const currentInningsIndex = innings - 1;
-      const isSecondInnings = innings === 2;
-      
-      console.log(`🎯 Ball update for innings ${innings}, Second innings: ${isSecondInnings}, Target: ${match.target}`);
-
-      // Current innings ensure karo
-      if (!match.scores[currentInningsIndex]) {
-        match.scores[currentInningsIndex] = {
-          innings: innings,
-          runs: 0,
-          wickets: 0,
-          overs: 0,
-          runRate: 0,
-          currentOver: { overNumber: 1, runs: 0, wickets: 0, balls: [] },
-          overHistory: [],
-          commentary: []
-        };
-      }
-
-      const scoreData = match.scores[currentInningsIndex];
-
-      // PlayersHistory ensure karo
-      if (!match.playersHistory.find(inn => inn.innings === innings)) {
-        match.playersHistory.push({
-          innings: innings,
-          players: []
-        });
-      }
-
-      const inningsHistory = match.playersHistory.find(inn => inn.innings === innings);
-      const playersHistoryThisInnings = inningsHistory.players;
-
-      // ✅ FIXED: GET NEXT BALL NUMBER FUNCTION - COMPLETELY REWRITTEN
-      const getNextBallNumber = () => {
-        const currentBalls = scoreData.currentOver.balls;
-        
-        // ✅ COMPLETE FIX: Agar current over empty hai, toh 1 return karo
-        if (currentBalls.length === 0) {
-          console.log(`🎯 First ball of over ${scoreData.currentOver.overNumber}, ball number: 1`);
-          return 1;
-        }
-        
-        // ✅ COMPLETE FIX: Last ball ka number lo aur +1 karo
-        const lastBallNumber = currentBalls[currentBalls.length - 1].ballNumber;
-        const nextBall = lastBallNumber + 1;
-        console.log(`🎯 Last ball number: ${lastBallNumber}, Next ball number: ${nextBall}`);
-        return nextBall;
-      };
-
-      // ✅ IMPROVED PLAYER UPDATE FUNCTION WITH BOWLER CHECK
-      const updatePlayerStats = (playerId, updates) => {
-        // ✅ BOWLER CHECK ADD KARO - Agar playerId undefined hai to return karo
-        if (!playerId) {
-          console.log(`⚠️ Player ID undefined, skipping update`);
-          return;
-        }
-
-        let playerStats = playersHistoryThisInnings.find(p => 
-          p.playerId && p.playerId.toString() === playerId.toString()
-        );
-
-        if (!playerStats) {
-          playerStats = {
-            playerId: playerId,
-            runs: 0, balls: 0, fours: 0, sixes: 0, strikeRate: 0,
-            wickets: 0, overs: 0, runsConceded: 0, maidens: 0, economy: 0,
-            wides: 0, noBalls: 0, dismissals: "", isOut: false
-          };
-          playersHistoryThisInnings.push(playerStats);
-        }
-
-        // Stats update karo
-        if (updates.runs !== undefined) {
-          playerStats.runs += updates.runs;
-          if (updates.runs === 4) playerStats.fours += 1;
-          if (updates.runs === 6) playerStats.sixes += 1;
-        }
-        if (updates.balls !== undefined) playerStats.balls += updates.balls;
-        if (updates.runsConceded !== undefined) playerStats.runsConceded += updates.runsConceded;
-        if (updates.wickets !== undefined) playerStats.wickets += updates.wickets;
-        if (updates.overs !== undefined) playerStats.overs += updates.overs;
-        if (updates.wides !== undefined) playerStats.wides += updates.wides;
-        if (updates.noBalls !== undefined) playerStats.noBalls += updates.noBalls;
-        if (updates.dismissal) playerStats.dismissals = updates.dismissal;
-        if (updates.isOut !== undefined) playerStats.isOut = updates.isOut;
-
-        // Rates calculate karo
-        if (playerStats.balls > 0) {
-          playerStats.strikeRate = parseFloat(((playerStats.runs / playerStats.balls) * 100).toFixed(2));
-        }
-        if (playerStats.overs > 0) {
-          playerStats.economy = parseFloat((playerStats.runsConceded / playerStats.overs).toFixed(2));
-        }
-
-        return playerStats;
-      };
-
-      let ballRuns = Number(runs) || 0;
-      let ballWicket = (Number(wickets) || 0) > 0;
-      let isLegalDelivery = true;
-      let commentaryLine = "";
-
-      // ✅ EXTRA TYPE CHECK - NO BALL AUR WIDE MEIN BALL COUNT NAHI BADHEGA
-      if (extraType === 'wide' || extraType === 'noball') {
-        isLegalDelivery = false;
-      }
-
-      // ✅ RUNS ADD KARO - NO BALL FIX
-      if (runs !== undefined) {
-        let runsToAdd = ballRuns;
-        
-        // ✅ NO BALL FIX: No ball ka 1 run extra hota hai + boundary runs
-        if (extraType === 'noball') {
-          runsToAdd = ballRuns + 1; // No ball ka 1 run + boundary runs
-          console.log(`🎯 No Ball: ${ballRuns} boundary runs + 1 penalty = ${runsToAdd} total runs`);
-        }
-        // ✅ WIDE FIX: Wide runs + 1 penalty
-        else if (extraType === 'wide') {
-          runsToAdd = ballRuns + 1; // Wide runs + 1 penalty
-          console.log(`🎯 Wide: ${ballRuns} extra runs + 1 penalty = ${runsToAdd} total runs`);
-        }
-
-        scoreData.runs += runsToAdd;
-        match.runs = scoreData.runs;
-
-        // Regular runs (no extra)
-        if (!extraType) {
-          if (striker) {
-            updatePlayerStats(striker, { runs: ballRuns, balls: isLegalDelivery ? 1 : 0 });
-          }
-          // ✅ BOWLER CHECK - Agar bowler hai tabhi update karo
-          if (bowler) {
-            updatePlayerStats(bowler, { runsConceded: ballRuns, balls: isLegalDelivery ? 1 : 0 });
-          }
-          // Commentary for regular runs
-          if (ballRuns === 0) commentaryLine = "Dot ball";
-          else if (ballRuns === 4) commentaryLine = "FOUR!";
-          else if (ballRuns === 6) commentaryLine = "SIX!";
-          else commentaryLine = `${ballRuns} run${ballRuns > 1 ? 's' : ''}`;
-        }
-        // Extra runs
-        else {
-          switch (extraType) {
-            case 'wide':
-              // ✅ BOWLER CHECK - Agar bowler hai tabhi update karo
-              if (bowler) {
-                updatePlayerStats(bowler, { 
-                  runsConceded: runsToAdd, // Total runs (boundary + penalty)
-                  wides: 1 
-                });
-              }
-              commentaryLine = `WIDE! ${runsToAdd} run${runsToAdd > 1 ? 's' : ''}${ballRuns > 0 ? ` (${ballRuns} boundary)` : ''}`;
-              break;
-              
-            case 'noball':
-              // ✅ BOWLER CHECK - Agar bowler hai tabhi update karo
-              if (bowler) {
-                updatePlayerStats(bowler, { 
-                  runsConceded: runsToAdd, // Total runs (boundary + penalty)
-                  noBalls: 1 
-                });
-              }
-              // ✅ NO BALL PE BATSMAN KO BOUNDARY RUNS MILENGE
-              if (striker && ballRuns > 0) {
-                updatePlayerStats(striker, { runs: ballRuns });
-              }
-              commentaryLine = `NO BALL! ${runsToAdd} run${runsToAdd > 1 ? 's' : ''}${ballRuns > 0 ? ` (${ballRuns} boundary)` : ''}`;
-              break;
-              
-            case 'bye':
-              commentaryLine = `${ballRuns} BYE${ballRuns > 1 ? 's' : ''}`;
-              break;
-            case 'legbye':
-              commentaryLine = `${ballRuns} LEG BYE${ballRuns > 1 ? 's' : ''}`;
-              break;
-          }
-        }
-      }
-
-      // ✅ WICKET ADD KARO - COMPLETE DISMISSAL TYPE HANDLING
-      if (ballWicket) {
-        scoreData.wickets += 1;
-        match.wickets = scoreData.wickets;
-
-        console.log(`🎯 Wicket taken! Dismissal Type: ${dismissalType}, Striker: ${striker}`);
-
-        // ✅ DISMISSAL TYPE KE HISAB SE PLAYER STATUS UPDATE
-        if (striker) {
-          // Striker ko out mark karo
-          updatePlayerStats(striker, { 
-            dismissal: dismissalType, 
-            balls: isLegalDelivery ? 1 : 0, 
-            isOut: true 
-          });
-
-          // Dismissal type ke hisab se commentary
-          switch(dismissalType) {
-            case 'bowled':
-              commentaryLine = `BOWLED! Clean bowled!`;
-              break;
-            case 'caught':
-              commentaryLine = `CAUGHT! Brilliant catch!`;
-              break;
-            case 'lbw':
-              commentaryLine = `LBW! Plumb in front!`;
-              break;
-            case 'runout':
-              commentaryLine = `RUN OUT! Direct hit!`;
-              break;
-            case 'stumped':
-              commentaryLine = `STUMPED! Quick work by the keeper!`;
-              break;
-            case 'hitwicket':
-              commentaryLine = `HIT WICKET! Unfortunate dismissal!`;
-              break;
-            default:
-              commentaryLine = `OUT! ${dismissalType}`;
-          }
-        }
-
-        // ✅ BOWLER KO WICKET CREDIT - Sirf jab bowler responsible ho AUR BOWLER EXIST KARTA HO
-        if (bowler && isLegalDelivery && 
-            ['bowled', 'caught', 'lbw', 'stumped', 'hitwicket'].includes(dismissalType)) {
-          updatePlayerStats(bowler, { wickets: 1 });
-          console.log(`🎯 Wicket credited to bowler: ${bowler}`);
-        }
-
-        // ✅ NEW BATSMAN ADD KARO (Agar provided hai)
-        if (newBatsman) {
-          match.currentStriker = newBatsman;
-          updatePlayerStats(newBatsman, { runs: 0, balls: 0, isOut: false });
-          commentaryLine += ` New batsman arrives.`;
-          console.log(`🔄 New batsman: ${newBatsman}`);
-        } else {
-          // Agar new batsman nahi hai, to striker ko hi null karo
-          match.currentStriker = null;
-        }
-
-        // ✅ 🚨 TEAM SCHEMA MEIN PLAYER STATUS UPDATE KARO
-        console.log(`🔄 Updating team schema for wicket...`);
-        for (let teamId of [match.team1, match.team2]) {
-          const team = await Team.findById(teamId);
-          if (!team) continue;
-
-          team.players = team.players.map((player) => {
-            const playerId = player._id.toString();
-
-            // Out hone wale player ka status "Out" karo
-            if (striker && playerId === striker.toString()) {
-              console.log(`🎯 Marking player as OUT: ${playerId}`);
-              return { ...player.toObject(), status: "Out" };
-            }
-            // New batsman ka status "Batting (Striker)" karo
-            else if (newBatsman && playerId === newBatsman.toString()) {
-              console.log(`🔄 New batsman status: Batting (Striker) - ${playerId}`);
-              return { ...player.toObject(), status: "Batting (Striker)" };
-            }
-            return player;
-          });
-
-          await team.save();
-          console.log(`✅ Team ${team.teamName} updated successfully`);
-        }
-      }
-
-      // ✅ FIXED: BALL NUMBER CALCULATION - COMPLETELY REWRITTEN
-      const nextBallNumber = getNextBallNumber();
-      console.log(`🎯 Final Ball Number: ${nextBallNumber}, Extra Type: ${extraType}, Legal Delivery: ${isLegalDelivery}`);
-
-      // ✅ OVER MANAGEMENT
-      // Ball data banayo
-      const ballData = {
-        ballNumber: nextBallNumber, // ✅ FIXED: CORRECT BALL NUMBER
-        runs: ballRuns,
-        wicket: ballWicket,
-        extraType: extraType,
-        striker: striker,
-        bowler: bowler,
-        newBatsman: ballWicket ? newBatsman : null,
-        dismissalType: ballWicket ? dismissalType : null,
-        timestamp: new Date(),
-        commentary: commentaryLine
-      };
-
-      // Current over mein add karo
-      scoreData.currentOver.balls.push(ballData);
-      
-      // ✅ OVER RUNS UPDATE FIX: Actual runs hi add karo, penalty runs nahi
-      if (extraType === 'noball') {
-        scoreData.currentOver.runs += (ballRuns + 1); // Boundary + penalty
-      } else if (extraType === 'wide') {
-        scoreData.currentOver.runs += (ballRuns + 1); // Extra runs + penalty  
-      } else {
-        scoreData.currentOver.runs += ballRuns;
-      }
-      
-      if (ballWicket) scoreData.currentOver.wickets += 1;
-
-      // ✅ FIXED: OVER HISTORY MANAGEMENT - PEHLI BALL SE HI BALLS ARRAY MEIN ADD KARO
-      let currentOverInHistory = scoreData.overHistory.find(over => 
-        over.overNumber === scoreData.currentOver.overNumber
-      );
-      
-      if (!currentOverInHistory) {
-        currentOverInHistory = {
-          overNumber: scoreData.currentOver.overNumber,
-          runs: 0,
-          wickets: 0,
-          wides: 0,
-          noBalls: 0,
-          balls: [] // ✅ FIXED: Initialize with empty array
-        };
-        scoreData.overHistory.push(currentOverInHistory);
-        console.log(`🔄 Created new over in history: Over ${currentOverInHistory.overNumber}`);
-      }
-
-      // ✅ FIXED: HAR BALL KO OVER HISTORY MEIN BHI ADD KARO
-      currentOverInHistory.balls.push(ballData);
-      console.log(`✅ Added ball ${ballData.ballNumber} to over history ${currentOverInHistory.overNumber}`);
-      
-      // ✅ OVER HISTORY RUNS FIX
-      if (extraType === 'noball') {
-        currentOverInHistory.runs += (ballRuns + 1);
-        currentOverInHistory.noBalls += 1;
-      } else if (extraType === 'wide') {
-        currentOverInHistory.runs += (ballRuns + 1);
-        currentOverInHistory.wides += 1;
-      } else {
-        currentOverInHistory.runs += ballRuns;
-      }
-      
-      if (ballWicket) currentOverInHistory.wickets += 1;
-
-      // ✅ OVERS COUNT UPDATE - EXTRA TYPES MEIN BALL COUNT NAHI BADHEGA
-      let [ov, b] = scoreData.overs.toString().split(".").map(Number);
-      if (isNaN(ov)) ov = 0;
-      if (isNaN(b)) b = 0;
-
-      // ✅ YEH FIX KARO: Only legal deliveries mein ball count badhao
-      if (isLegalDelivery) {
-        b += 1;
-      }
-
-      // ✅ OVER COMPLETE? - BOWLER OVERS UPDATE FIXED WITH BOWLER CHECK
-      if (b >= 6) {
-        console.log(`🎯 Over completed! Bowler: ${bowler}, Over: ${ov}.${b}`);
-        
-        // ✅ BOWLER KO OVER COUNT DO - FIXED (WITH BOWLER CHECK)
-        if (bowler) {
-          updatePlayerStats(bowler, { overs: 1 }); // ✅ 1 over add karo
-          
-          // Maiden over check karo
-          if (currentOverInHistory.runs === 0) {
-            updatePlayerStats(bowler, { maidens: 1 });
-            console.log(`🎯 Maiden over for bowler: ${bowler}`);
-          }
-          
-          // ✅ SAFE CHECK FOR BOWLER STATS
-          const bowlerStats = playersHistoryThisInnings.find(p => 
-            p.playerId && p.playerId.toString() === bowler.toString()
-          );
-          console.log(`📊 Bowler ${bowler} overs updated to: ${bowlerStats?.overs || 0}`);
-        }
-
-        // Next over start karo
-        ov += 1;
-        b = 0;
-        scoreData.currentOver = {
-          overNumber: ov + 1,
-          runs: 0,
-          wickets: 0,
-          balls: []
-        };
-
-        // Over complete commentary
-        const overCommentary = `End of over ${ov}. Score: ${scoreData.runs}/${scoreData.wickets}`;
-        scoreData.commentary.push(overCommentary);
-        match.commentary.push(overCommentary);
-        
-        console.log(`🔄 Starting new over: ${ov + 1}`);
-      }
-
-      scoreData.overs = parseFloat(`${ov}.${b}`);
-      match.overs = scoreData.overs;
-
-      // Run rate calculate karo
-      scoreData.runRate = scoreData.overs > 0 ? 
-        parseFloat((scoreData.runs / scoreData.overs).toFixed(2)) : 0;
-      match.runRate = scoreData.runRate;
-
-      // ✅ CURRENT PLAYERS UPDATE (Only if not changed by wicket)
-      if (striker && !ballWicket) {
-        match.currentStriker = striker;
-        
-        // Team schema mein striker status update karo
-        for (let teamId of [match.team1, match.team2]) {
-          const team = await Team.findById(teamId);
-          if (!team) continue;
-
-          team.players = team.players.map((player) => {
-            const playerId = player._id.toString();
-
-            if (playerId === striker.toString()) {
-              return { ...player.toObject(), status: "Batting (Striker)" };
-            }
-            return player;
-          });
-
-          await team.save();
-        }
-      }
-      
-      if (nonStriker) {
-        match.nonStriker = nonStriker;
-        
-        // Team schema mein non-striker status update karo
-        for (let teamId of [match.team1, match.team2]) {
-          const team = await Team.findById(teamId);
-          if (!team) continue;
-
-          team.players = team.players.map((player) => {
-            const playerId = player._id.toString();
-
-            if (playerId === nonStriker.toString()) {
-              return { ...player.toObject(), status: "Batting (Non-Striker)" };
-            }
-            return player;
-          });
-
-          await team.save();
-        }
-      }
-      
-      // ✅ BOWLER UPDATE WITH SAFE CHECK
-      if (bowler && !changeBowler) {
-        match.currentBowler = bowler;
-        
-        // Team schema mein bowler status update karo
-        for (let teamId of [match.team1, match.team2]) {
-          const team = await Team.findById(teamId);
-          if (!team) continue;
-
-          team.players = team.players.map((player) => {
-            const playerId = player._id.toString();
-
-            if (playerId === bowler.toString()) {
-              return { ...player.toObject(), status: "Bowling" };
-            }
-            return player;
-          });
-
-          await team.save();
-        }
-      }
-
-      // ✅ COMMENTARY ADD KARO
-      if (commentaryLine) {
-        scoreData.commentary.push(commentaryLine);
-        match.commentary.push(commentaryLine);
-      }
-
-      // ✅ MONGOOSE KO BATAYO KI SAB KUCH CHANGE HUA HAI
-      match.markModified('scores');
-      match.markModified('playersHistory');
-      match.markModified('runs');
-      match.markModified('wickets');
-      match.markModified('overs');
-      match.markModified('runRate');
-      match.markModified('currentStriker');
-      match.markModified('nonStriker');
-      match.markModified('currentBowler');
-      match.markModified('commentary');
-
-      console.log(`💾 Saving match data...`);
-      console.log(`📊 Final Score: ${scoreData.runs}/${scoreData.wickets} in ${scoreData.overs} overs`);
-      console.log(`🎯 Current Over Balls:`, scoreData.currentOver.balls.map(b => `Ball ${b.ballNumber}: ${b.runs} runs`));
-      console.log(`📈 Over History:`, scoreData.overHistory.map(over => `Over ${over.overNumber}: ${over.balls.length} balls - ${over.balls.map(b => b.ballNumber).join(', ')}`));
-      
-      // ✅ DEBUG: Check bowler stats before save (WITH SAFE CHECK)
-      if (bowler) {
-        const bowlerStats = playersHistoryThisInnings.find(p => 
-          p.playerId && p.playerId.toString() === bowler.toString()
-        );
-        if (bowlerStats) {
-          console.log(`🎯 Bowler Final Stats - Overs: ${bowlerStats.overs}, Runs: ${bowlerStats.runsConceded}, Wickets: ${bowlerStats.wickets}`);
-        }
-      }
-
-      // ✅ FINAL SAVE WITH TARGET INFORMATION
-      const savedMatch = await match.save();
-      console.log(`✅ Match saved successfully!`);
-
-      // ✅ RESPONSE MEIN TARGET BHI SEND KARO AGAR SECOND INNINGS HAI
-      const responseData = {
-        success: true,
-        message: "Ball updated successfully",
-        match: savedMatch
-      };
-
-      if (isSecondInnings) {
-        responseData.target = match.target;
-        responseData.requiredRuns = Math.max(0, match.target - scoreData.runs);
-        responseData.remainingWickets = 10 - scoreData.wickets;
-        console.log(`🎯 Second innings update - Target: ${match.target}, Required: ${responseData.requiredRuns}`);
-      }
-
-      return res.status(200).json(responseData);
     }
 
     // Agar koi valid action nahi hai
@@ -3553,8 +3656,14 @@ export const createMatchForGame = async (req, res) => {
 export const startGameMatch = async (req, res) => {
   try {
     const { userId, matchId } = req.params;
+    const {
+      startKickTime,
+      totalDuration,
+      halfTimeDuration,
+      extraTimeAllowed,
+      extraTimeDuration
+    } = req.body;
 
-    // Validate required params
     if (!userId || !matchId) {
       return res.status(400).json({
         success: false,
@@ -3562,19 +3671,20 @@ export const startGameMatch = async (req, res) => {
       });
     }
 
-    // Validate user existence
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ success: false, message: "User not found ❌" });
     }
 
-    // Find match
-    const match = await GameMatch.findById(matchId);
+    const match = await GameMatch.findById(matchId).populate({
+      path: 'teams.teamId',
+      populate: { path: 'players', model: 'User' }
+    });
+
     if (!match) {
       return res.status(404).json({ success: false, message: "Match not found ❌" });
     }
 
-    // Optional: Check if the user is the creator of the match
     if (String(match.createdBy) !== String(userId)) {
       return res.status(403).json({
         success: false,
@@ -3582,17 +3692,43 @@ export const startGameMatch = async (req, res) => {
       });
     }
 
-    // Only allow starting if match is pending
-    if (match.status !== 'pending') {
+    if (match.status !== 'upcoming') {
       return res.status(400).json({
         success: false,
         message: `Match cannot be started. Current status is '${match.status}' ❌`,
       });
     }
 
-    // Update match status
+    if (!match.teams?.length) {
+      return res.status(400).json({
+        success: false,
+        message: "No teams found in this match ❌"
+      });
+    }
+
+    const scoreCard = match.teams.map(t => {
+      const team = t.teamId;
+      return {
+        teamId: team._id,
+        teamName: team.name,
+        teamGoals: 0,
+        players: team.players.map(player => ({
+          playerId: player._id,
+          playerName: player.name,
+          goals: 0
+        }))
+      };
+    });
+
+    const now = new Date();
     match.status = 'live';
-    match.startedAt = new Date();
+    match.startedAt = now;
+    match.startKickTime = startKickTime || now;
+    match.totalDuration = totalDuration || 90;
+    match.halfTimeDuration = halfTimeDuration || 15;
+    match.extraTimeAllowed = extraTimeAllowed ?? false;
+    match.extraTimeDuration = extraTimeDuration || 30;
+    match.scoreCard = scoreCard;
 
     await match.save();
 
@@ -3604,6 +3740,12 @@ export const startGameMatch = async (req, res) => {
         name: match.name,
         status: match.status,
         startedAt: match.startedAt,
+        startKickTime: match.startKickTime,
+        totalDuration: match.totalDuration,
+        halfTimeDuration: match.halfTimeDuration,
+        extraTimeAllowed: match.extraTimeAllowed,
+        extraTimeDuration: match.extraTimeDuration,
+        scoreCard: match.scoreCard
       },
     });
 
@@ -3864,5 +4006,215 @@ export const createGameMatchforFootball = async (req, res) => {
       message: 'Failed to create game match',
       error: error.message,
     });
+  }
+};
+
+
+
+
+export const getSingleGameMatches = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+
+    if (!matchId) {
+      return res.status(400).json({
+        success: false,
+        message: "Match ID is required ❌"
+      });
+    }
+
+    const match = await GameMatch.findById(matchId)
+      .populate({
+        path: 'teams.teamId',
+        populate: { path: 'players', model: 'User' }
+      })
+      .populate({ path: 'winner', model: 'Team' });
+
+    if (!match) {
+      return res.status(404).json({
+        success: false,
+        message: "Match not found ❌"
+      });
+    }
+
+    let scoreDetails = {};
+    let liveGoalScores = [];
+
+    // Only show scores if not upcoming
+    if (match.status !== 'upcoming') {
+      liveGoalScores = (match.scoreCard || []).map(teamScore => ({
+        teamId: teamScore.teamId,
+        teamName: teamScore.teamName,
+        teamGoals: teamScore.teamGoals
+      }));
+
+      if (match.status === 'half-time') {
+        scoreDetails = {
+          halfTimeScore: match.halfTimeScore || {},
+          timeElapsed: match.timeElapsed || 45
+        };
+      } else if (match.status === 'extra-time') {
+        scoreDetails = {
+          extraTimeScore: match.extraTimeScore || {},
+          timeElapsed: match.timeElapsed || 105
+        };
+      } else if (match.status === 'finished') {
+        scoreDetails = {
+          finalScore: match.finalScore || {},
+          timeElapsed: match.timeElapsed || 90
+        };
+      }
+    }
+
+    const matchData = {
+      _id: match._id,
+      name: match.name,
+      status: match.status,
+      startedAt: match.startedAt,
+      startKickTime: match.startKickTime,
+      totalDuration: match.totalDuration,
+      halfTimeDuration: match.halfTimeDuration,
+      extraTimeAllowed: match.extraTimeAllowed,
+      extraTimeDuration: match.extraTimeDuration,
+      scoreCard: match.status !== 'upcoming' ? match.scoreCard : [],
+      liveGoalScores,
+      winner: match.winner
+        ? { teamId: match.winner._id, teamName: match.winner.name }
+        : null,
+      teams: match.teams.map(t => {
+        const team = t.teamId;
+        return {
+          teamId: team._id,
+          teamName: team.name,
+          players: team.players.map(player => ({
+            playerId: player._id,
+            playerName: player.name
+          }))
+        };
+      }),
+      ...scoreDetails
+    };
+
+    const io = req.app.get("io");
+    if (io) io.emit("match:update", matchData);
+
+    res.status(200).json({
+      success: true,
+      message: "Match fetched successfully ✅",
+      match: matchData
+    });
+
+  } catch (error) {
+    console.error("Error fetching match:", error);
+    res.status(500).json({
+      success: false,
+      message: "Internal server error ❌"
+    });
+  }
+};
+
+
+
+
+
+
+export const updateMatchScore = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+    const { teamId, playerId, goals, status, halfTimeScore, extraTimeScore, finalScore, timeElapsed } = req.body;
+
+    if (!matchId || !teamId || !playerId || typeof goals !== 'number') {
+      return res.status(400).json({
+        success: false,
+        message: "matchId, teamId, playerId and goals (number) are required ❌"
+      });
+    }
+
+    const match = await GameMatch.findById(matchId);
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found ❌" });
+    }
+
+    if (!match.scoreCard || !Array.isArray(match.scoreCard)) {
+      return res.status(400).json({ success: false, message: "ScoreCard is not initialized ❌" });
+    }
+
+    // Find team in scoreCard
+    const teamScore = match.scoreCard.find(team => String(team.teamId) === String(teamId));
+    if (!teamScore) {
+      return res.status(404).json({ success: false, message: "Team not found in scorecard ❌" });
+    }
+
+    // Update team goals
+    teamScore.teamGoals += goals;
+
+    // Find player
+    const playerScore = teamScore.players.find(p => String(p.playerId) === String(playerId));
+    if (!playerScore) {
+      return res.status(404).json({ success: false, message: "Player not found in team ❌" });
+    }
+
+    // Update player goals
+    playerScore.goals += goals;
+
+    // Optional: Update match status and time-related scores if provided
+    if (status) {
+      match.status = status;
+    }
+    if (halfTimeScore) {
+      match.halfTimeScore = halfTimeScore;
+    }
+    if (extraTimeScore) {
+      match.extraTimeScore = extraTimeScore;
+    }
+    if (finalScore) {
+      match.finalScore = finalScore;
+    }
+    if (timeElapsed !== undefined) {
+      match.timeElapsed = timeElapsed;
+    }
+
+    // Save match
+    await match.save();
+
+    // Prepare liveGoalScores
+    const liveGoalScores = match.scoreCard.map(team => ({
+      teamId: team.teamId,
+      teamName: team.teamName,
+      teamGoals: team.teamGoals
+    }));
+
+    // Compose updated match data for emit
+    const updatedMatchData = {
+      _id: match._id,
+      name: match.name,
+      status: match.status,
+      startedAt: match.startedAt,
+      startKickTime: match.startKickTime,
+      totalDuration: match.totalDuration,
+      halfTimeDuration: match.halfTimeDuration,
+      extraTimeAllowed: match.extraTimeAllowed,
+      extraTimeDuration: match.extraTimeDuration,
+      scoreCard: match.scoreCard,
+      liveGoalScores,
+      winner: match.winner || null,
+      halfTimeScore: match.halfTimeScore || null,
+      extraTimeScore: match.extraTimeScore || null,
+      finalScore: match.finalScore || null,
+      timeElapsed: match.timeElapsed || null,
+    };
+
+    // Emit updated match data
+    io.emit("match:update", updatedMatchData);
+
+    return res.status(200).json({
+      success: true,
+      message: "Score updated successfully ✅",
+      match: updatedMatchData
+    });
+
+  } catch (error) {
+    console.error("Error updating score:", error);
+    res.status(500).json({ success: false, message: "Internal server error ❌" });
   }
 };
