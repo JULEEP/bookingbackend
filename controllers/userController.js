@@ -2322,33 +2322,6 @@ export const updateLiveScore = async (req, res) => {
       return res.status(404).json({ success: false, message: "Match not found" });
     }
 
-    // ✅ SOCKET.IO EMIT FUNCTION - Har update ke baad call karo
-    const emitLiveUpdate = (updateType, message, additionalData = {}) => {
-      const io = req.app.get("io");
-      if (io) {
-        const updateData = {
-          type: updateType,
-          matchId: id,
-          innings: innings,
-          message: message,
-          data: {
-            score: `${match.runs || 0}/${match.wickets || 0}`,
-            overs: match.overs || 0,
-            runRate: match.runRate || 0,
-            currentStriker: match.currentStriker,
-            currentBowler: match.currentBowler,
-            target: match.target,
-            status: match.status,
-            ...additionalData
-          },
-          timestamp: new Date().toISOString()
-        };
-
-        io.emit("live-match-update", updateData);
-        console.log(`📡 Socket emit: live-match-update - ${updateType}`);
-      }
-    };
-
     // ✅ OVER HISTORY FORMATTING FUNCTION
     const getFormattedOverHistory = (overHistory) => {
       if (!overHistory || overHistory.length === 0) return [];
@@ -2542,12 +2515,23 @@ export const updateLiveScore = async (req, res) => {
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
 
-      // ✅ SOCKET EMIT
-      emitLiveUpdate("MATCH_STATUS_UPDATE", `Match status updated to ${matchStatus}`, {
-        matchStatus: matchStatus,
-        startTime: match.startTime,
-        endTime: match.endTime
-      });
+      // ✅ SOCKET.IO EMIT - SIRF YAHAN ADD KARO
+      const io = req.app.get("io");
+      if (io) {
+        io.emit("live-match-update", {
+          type: "MATCH_STATUS_UPDATE",
+          matchId: id,
+          data: {
+            success: true,
+            message: `Match status updated to ${matchStatus}`,
+            match: match,
+            overHistory: formattedOverHistory,
+            playerDetails: updatedPlayerDetails
+          },
+          timestamp: new Date().toISOString()
+        });
+        console.log("📡 Socket emit: live-match-update - MATCH_STATUS_UPDATE");
+      }
       
       return res.status(200).json({
         success: true,
@@ -2770,13 +2754,6 @@ export const updateLiveScore = async (req, res) => {
       
       console.log(`✅ Inning status updated to ${inningStatus}, continuing with player updates...`);
       
-      // ✅ SOCKET EMIT
-      emitLiveUpdate("INNINGS_STATUS_UPDATE", `Innings status updated to ${inningStatus}`, {
-        inningStatus: inningStatus,
-        currentInnings: match.currentInnings,
-        target: match.target
-      });
-      
       return res.status(200).json({
         success: true,
         message: `Inning status updated to ${inningStatus}`,
@@ -2841,12 +2818,6 @@ export const updateLiveScore = async (req, res) => {
         playerDetails, 
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
-
-      // ✅ SOCKET EMIT
-      emitLiveUpdate("PLAYERS_SWAPPED", "Striker and non-striker swapped", {
-        currentStriker: match.currentStriker,
-        currentNonStriker: match.nonStriker
-      });
       
       return res.status(200).json({
         success: true,
@@ -2903,11 +2874,6 @@ export const updateLiveScore = async (req, res) => {
         playerDetails, 
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
-
-      // ✅ SOCKET EMIT
-      emitLiveUpdate("BOWLER_CHANGED", "Bowler changed successfully", {
-        currentBowler: match.currentBowler
-      });
       
       return res.status(200).json({
         success: true,
@@ -3190,12 +3156,6 @@ export const updateLiveScore = async (req, res) => {
         playerDetails, 
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
-
-      // ✅ SOCKET EMIT
-      emitLiveUpdate("BALL_UNDONE", "Last ball undone", {
-        score: `${savedMatch.runs || 0}/${savedMatch.wickets || 0}`,
-        overs: savedMatch.overs || 0
-      });
       
       return res.status(200).json({
         success: true,
@@ -3803,21 +3763,6 @@ export const updateLiveScore = async (req, res) => {
         console.log(`🎯 Second innings update - Target: ${match.target}, Required: ${responseData.requiredRuns}`);
       }
 
-      // ✅ SOCKET EMIT FOR BALL UPDATE
-      emitLiveUpdate("BALL_UPDATED", "New ball added", {
-        score: `${savedMatch.runs || 0}/${savedMatch.wickets || 0}`,
-        overs: savedMatch.overs || 0,
-        runRate: savedMatch.runRate || 0,
-        ballDetails: {
-          runs: ballRuns,
-          wicket: ballWicket,
-          extraType: extraType,
-          commentary: commentaryLine
-        },
-        requiredRuns: responseData.requiredRuns,
-        remainingWickets: responseData.remainingWickets
-      });
-
       return res.status(200).json(responseData);
     }
 
@@ -3929,13 +3874,6 @@ export const updateLiveScore = async (req, res) => {
         playerDetails, 
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
-
-      // ✅ SOCKET EMIT
-      emitLiveUpdate("PLAYERS_UPDATED", "Players updated successfully", {
-        currentStriker: match.currentStriker,
-        currentNonStriker: match.nonStriker,
-        currentBowler: match.currentBowler
-      });
       
       return res.status(200).json({
         success: true,
@@ -3994,11 +3932,6 @@ export const updateLiveScore = async (req, res) => {
         playerDetails, 
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
-
-      // ✅ SOCKET EMIT
-      emitLiveUpdate("STRIKER_CHANGED", "Striker changed", {
-        currentStriker: match.currentStriker
-      });
       
       return res.status(200).json({
         success: true,
@@ -4017,19 +3950,6 @@ export const updateLiveScore = async (req, res) => {
 
   } catch (error) {
     console.error("Update Live Score Error:", error);
-    
-    // ✅ SOCKET EMIT FOR ERROR
-    const io = req.app.get("io");
-    if (io) {
-      io.emit("live-match-update", {
-        type: "ERROR",
-        matchId: id,
-        message: "Error updating live score",
-        error: error.message,
-        timestamp: new Date().toISOString()
-      });
-    }
-
     return res.status(500).json({
       success: false,
       message: "Error updating live score",
@@ -5708,6 +5628,7 @@ export const getSingleBadmintonById = async (req, res) => {
               playerId: playerScore.playerId,
               playerName: playerInfo?.name || "Unknown Player",
               points: playerScore.points || 0,
+              goals: playerScore.goals || 0,
               warningCards: playerScore.warningCards || { yellow: 0, red: 0 },
               isOut: playerScore.isOut || false
             };
@@ -5747,6 +5668,7 @@ export const getSingleBadmintonById = async (req, res) => {
             playerId: player._id,
             playerName: player.name,
             points: playerScoreEntry?.points ?? 0,
+            goals: playerScoreEntry?.goals ?? 0,
             warningCards: playerScoreEntry?.warningCards || { yellow: 0, red: 0 },
             isOut: playerScoreEntry?.isOut || false
           };
