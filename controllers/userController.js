@@ -2322,6 +2322,27 @@ export const updateLiveScore = async (req, res) => {
       return res.status(404).json({ success: false, message: "Match not found" });
     }
 
+    // ✅ SOCKET.IO INSTANCE
+    const io = req.app.get("io");
+
+    // ✅ SOCKET EMIT HELPER FUNCTION
+    const emitLiveUpdate = (updateType, data) => {
+      if (io) {
+        const liveUpdateData = {
+          type: updateType,
+          matchId: id,
+          data: data,
+          timestamp: new Date().toISOString()
+        };
+        
+        // ✅ YAHAN PE SIRF EMIT KARO - RESPONSE KE SAATH NAHI
+        io.to(id).emit('live-score-update', liveUpdateData);
+        io.emit('match-update', { matchId: id, ...liveUpdateData });
+        
+        console.log(`📡 Socket emit: ${updateType} for match ${id}`);
+      }
+    };
+
     // ✅ OVER HISTORY FORMATTING FUNCTION
     const getFormattedOverHistory = (overHistory) => {
       if (!overHistory || overHistory.length === 0) return [];
@@ -2515,31 +2536,18 @@ export const updateLiveScore = async (req, res) => {
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
 
-      // ✅ SOCKET.IO EMIT - SIRF YAHAN ADD KARO
-      const io = req.app.get("io");
-      if (io) {
-        io.emit("live-match-update", {
-          type: "MATCH_STATUS_UPDATE",
-          matchId: id,
-          data: {
-            success: true,
-            message: `Match status updated to ${matchStatus}`,
-            match: match,
-            overHistory: formattedOverHistory,
-            playerDetails: updatedPlayerDetails
-          },
-          timestamp: new Date().toISOString()
-        });
-        console.log("📡 Socket emit: live-match-update - MATCH_STATUS_UPDATE");
-      }
-      
-      return res.status(200).json({
+      const responseData = {
         success: true,
         message: `Match status updated to ${matchStatus}`,
         match: match,
         overHistory: formattedOverHistory,
         playerDetails: updatedPlayerDetails
-      });
+      };
+
+      // ✅ SIRF YAHAN SOCKET EMIT KARO
+      emitLiveUpdate("MATCH_STATUS_UPDATE", responseData);
+      
+      return res.status(200).json(responseData);
     }
 
     // ✅ 2. INNING STATUS UPDATE
@@ -2754,14 +2762,19 @@ export const updateLiveScore = async (req, res) => {
       
       console.log(`✅ Inning status updated to ${inningStatus}, continuing with player updates...`);
       
-      return res.status(200).json({
+      const responseData = {
         success: true,
         message: `Inning status updated to ${inningStatus}`,
         match: match,
         overHistory: formattedOverHistory,
         target: match.target,
         playerDetails: updatedPlayerDetails
-      });
+      };
+
+      // ✅ SIRF YAHAN SOCKET EMIT KARO
+      emitLiveUpdate("INNING_STATUS_UPDATE", responseData);
+      
+      return res.status(200).json(responseData);
     }
 
     // ✅ 3. SWAP STRIKER
@@ -2819,13 +2832,18 @@ export const updateLiveScore = async (req, res) => {
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
       
-      return res.status(200).json({
+      const responseData = {
         success: true,
         message: "Striker swapped successfully",
         match: match,
         overHistory: formattedOverHistory,
         playerDetails: updatedPlayerDetails
-      });
+      };
+
+      // ✅ SIRF YAHAN SOCKET EMIT KARO
+      emitLiveUpdate("STRIKER_SWAP", responseData);
+      
+      return res.status(200).json(responseData);
     }
 
     // ✅ 4. BOWLER CHANGE
@@ -2875,13 +2893,18 @@ export const updateLiveScore = async (req, res) => {
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
       
-      return res.status(200).json({
+      const responseData = {
         success: true,
         message: "Bowler changed successfully",
         match: match,
         overHistory: formattedOverHistory,
         playerDetails: updatedPlayerDetails
-      });
+      };
+
+      // ✅ SIRF YAHAN SOCKET EMIT KARO
+      emitLiveUpdate("BOWLER_CHANGE", responseData);
+      
+      return res.status(200).json(responseData);
     }
 
     // ✅ 5. UNDO LAST BALL
@@ -3157,13 +3180,18 @@ export const updateLiveScore = async (req, res) => {
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
       
-      return res.status(200).json({
+      const responseData = {
         success: true,
         message: "Last ball undone successfully",
         match: savedMatch,
         overHistory: formattedOverHistory,
         playerDetails: updatedPlayerDetails
-      });
+      };
+
+      // ✅ SIRF YAHAN SOCKET EMIT KARO
+      emitLiveUpdate("UNDO_BALL", responseData);
+      
+      return res.status(200).json(responseData);
     }
 
     // ✅ 6. MAIN BALL UPDATE LOGIC (IMPORTANT: DIRECT PLAYER UPDATES SE PEHLE)
@@ -3763,6 +3791,9 @@ export const updateLiveScore = async (req, res) => {
         console.log(`🎯 Second innings update - Target: ${match.target}, Required: ${responseData.requiredRuns}`);
       }
 
+      // ✅ SIRF YAHAN SOCKET EMIT KARO - BALL UPDATE KE LIYE
+      emitLiveUpdate("BALL_UPDATE", responseData);
+      
       return res.status(200).json(responseData);
     }
 
@@ -3875,14 +3906,19 @@ export const updateLiveScore = async (req, res) => {
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
       
-      return res.status(200).json({
+      const responseData = {
         success: true,
         message: "Players updated successfully",
         match: match,
         target: match.target,
         overHistory: formattedOverHistory,
         playerDetails: updatedPlayerDetails
-      });
+      };
+
+      // ✅ SIRF YAHAN SOCKET EMIT KARO
+      emitLiveUpdate("PLAYER_UPDATE", responseData);
+      
+      return res.status(200).json(responseData);
     }
 
     // ✅ 8. STRIKER CHANGE (without wicket)
@@ -3933,13 +3969,18 @@ export const updateLiveScore = async (req, res) => {
         match.playersHistory.find(inn => inn.innings === innings)?.players || []
       );
       
-      return res.status(200).json({
+      const responseData = {
         success: true,
         message: "Striker changed successfully",
         match: match,
         overHistory: formattedOverHistory,
         playerDetails: updatedPlayerDetails
-      });
+      };
+
+      // ✅ SIRF YAHAN SOCKET EMIT KARO
+      emitLiveUpdate("STRIKER_CHANGE", responseData);
+      
+      return res.status(200).json(responseData);
     }
 
     // Agar koi valid action nahi hai
