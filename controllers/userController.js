@@ -1850,17 +1850,56 @@ export const getSingleMatchById = async (req, res) => {
     };
 
     // ✅ SOCKET.IO EMIT - ADDED HERE
-    const io = req.app.get("io");
-    if (io) {
-      io.emit("live-match-update", {
-        type: "MATCH_FETCHED",
-        matchId: id,
-        data: responseData,
-        timestamp: new Date().toISOString()
-      });
-      console.log("📡 Socket emit: live-match-update - MATCH_FETCHED");
-    }
-
+  // ✅ FULL DETAILED PRINT
+const io = req.app.get("io");
+if (io) {
+  const socketData = {
+    type: "MATCH_FETCHED",
+    matchId: id,
+    data: responseData,
+    timestamp: new Date().toISOString()
+  };
+  
+  io.emit("live-match-update", socketData);
+  
+  console.log("=".repeat(80));
+  console.log("📡 [CRICKET] SOCKET EMIT - COMPLETE DATA DUMP");
+  console.log("=".repeat(80));
+  
+  // ✅ SOCKET DATA
+  console.log("🎯 SOCKET PAYLOAD:");
+  console.log(JSON.stringify(socketData, null, 2));
+  
+  // ✅ MATCH SUMMARY
+  console.log("🏏 MATCH SUMMARY:");
+  console.log("   Match ID:", responseData.match?._id);
+  console.log("   Team 1:", responseData.match?.team1?.teamName);
+  console.log("   Team 2:", responseData.match?.team2?.teamName);
+  console.log("   Status:", responseData.match?.status);
+  console.log("   Current Innings:", responseData.match?.currentInnings);
+  
+  // ✅ LIVE DATA
+  console.log("📊 LIVE DATA:");
+  console.log("   Score:", responseData.match?.liveData?.score);
+  console.log("   Overs:", responseData.match?.liveData?.overs);
+  console.log("   Run Rate:", responseData.match?.liveData?.runRate);
+  
+  // ✅ CURRENT PLAYERS
+  console.log("👥 CURRENT PLAYERS:");
+  console.log("   Striker:", responseData.match?.currentPlayers?.striker?.playerName);
+  console.log("   Non-Striker:", responseData.match?.currentPlayers?.nonStriker?.playerName);
+  console.log("   Bowler:", responseData.match?.currentPlayers?.bowler?.playerName);
+  
+  // ✅ SCORECARD INFO
+  console.log("📈 SCORECARD INFO:");
+  if (responseData.match?.scorecard?.innings) {
+    responseData.match.scorecard.innings.forEach((inn, index) => {
+      console.log(`   Innings ${index + 1}: ${inn.totalRuns}/${inn.totalWickets} in ${inn.totalOvers} overs`);
+    });
+  }
+  
+  console.log("=".repeat(80));
+}
     return res.status(200).json(responseData);
   } catch (error) {
     console.error("Error fetching single match:", error);
@@ -2325,24 +2364,117 @@ export const updateLiveScore = async (req, res) => {
     // ✅ SOCKET.IO INSTANCE
     const io = req.app.get("io");
 
-    // ✅ SOCKET EMIT HELPER FUNCTION
-    const emitLiveUpdate = (updateType, data) => {
-      if (io) {
-        const liveUpdateData = {
-          type: updateType,
-          matchId: id,
-          data: data,
-          timestamp: new Date().toISOString()
-        };
-        
-        // ✅ YAHAN PE SIRF EMIT KARO - RESPONSE KE SAATH NAHI
-        io.to(id).emit('live-score-update', liveUpdateData);
-        io.emit('match-update', { matchId: id, ...liveUpdateData });
-        
-        console.log(`📡 Socket emit: ${updateType} for match ${id}`);
-      }
+  // ✅ SOCKET EMIT HELPER FUNCTION WITH COMPLETE DATA PRINT
+const emitLiveUpdate = (updateType, data) => {
+  if (io) {
+    const liveUpdateData = {
+      type: updateType,
+      matchId: id,
+      data: data,
+      timestamp: new Date().toISOString()
     };
-
+    
+    // ✅ YAHAN PE SIRF EMIT KARO - RESPONSE KE SAATH NAHI
+    io.to(id).emit('live-score-update', liveUpdateData);
+    io.emit('live-score-update', { matchId: id, ...liveUpdateData });
+    
+    // ✅ COMPLETE DATA PRINT KARO
+    console.log("=".repeat(80));
+    console.log("📡 [CRICKET-LIVE] SOCKET EMIT - COMPLETE DATA DUMP");
+    console.log("=".repeat(80));
+    
+    // ✅ BASIC INFO
+    console.log("🎯 Update Type:", updateType);
+    console.log("🆔 Match ID:", id);
+    console.log("⏰ Timestamp:", liveUpdateData.timestamp);
+    
+    // ✅ DATA SUMMARY
+    console.log("📊 DATA SUMMARY:");
+    console.log("   - Success:", data?.success);
+    console.log("   - Message:", data?.message || "N/A");
+    
+    // ✅ MATCH DATA (if available)
+    if (data?.match) {
+      console.log("🏏 MATCH DATA:");
+      console.log("   - Match ID:", data.match._id);
+      console.log("   - Team 1:", data.match.team1?.teamName || "N/A");
+      console.log("   - Team 2:", data.match.team2?.teamName || "N/A");
+      console.log("   - Status:", data.match.status || "N/A");
+      console.log("   - Current Innings:", data.match.currentInnings || 1);
+      
+      // ✅ LIVE SCORE
+      if (data.match.runs !== undefined && data.match.wickets !== undefined) {
+        console.log("   - Live Score:", `${data.match.runs}/${data.match.wickets}`);
+      }
+      if (data.match.overs !== undefined) {
+        console.log("   - Overs:", data.match.overs);
+      }
+      if (data.match.runRate !== undefined) {
+        console.log("   - Run Rate:", data.match.runRate);
+      }
+      
+      // ✅ CURRENT PLAYERS
+      if (data.match.currentStriker || data.match.currentBowler) {
+        console.log("   - Current Players:");
+        if (data.match.currentStriker) {
+          console.log("     * Striker:", data.match.currentStriker.name || data.match.currentStriker);
+        }
+        if (data.match.nonStriker) {
+          console.log("     * Non-Striker:", data.match.nonStriker.name || data.match.nonStriker);
+        }
+        if (data.match.currentBowler) {
+          console.log("     * Bowler:", data.match.currentBowler.name || data.match.currentBowler);
+        }
+      }
+      
+      // ✅ TARGET (for 2nd innings)
+      if (data.match.target) {
+        console.log("   - Target:", data.match.target);
+      }
+    }
+    
+    // ✅ OVER HISTORY SUMMARY
+    if (data?.overHistory && Array.isArray(data.overHistory)) {
+      console.log("📈 OVER HISTORY SUMMARY:");
+      console.log("   - Total Overs:", data.overHistory.length);
+      if (data.overHistory.length > 0) {
+        const last3Overs = data.overHistory.slice(-3);
+        last3Overs.forEach(over => {
+          console.log(`     * Over ${over.overNumber}: ${over.runs} runs`);
+        });
+      }
+    }
+    
+    // ✅ PLAYER DETAILS SUMMARY
+    if (data?.playerDetails) {
+      console.log("👥 PLAYER DETAILS SUMMARY:");
+      if (data.playerDetails.striker) {
+        console.log("   - Striker:", 
+          data.playerDetails.striker.name, 
+          `${data.playerDetails.striker.runs || 0}r/${data.playerDetails.striker.balls || 0}b`
+        );
+      }
+      if (data.playerDetails.nonStriker) {
+        console.log("   - Non-Striker:", 
+          data.playerDetails.nonStriker.name, 
+          `${data.playerDetails.nonStriker.runs || 0}r/${data.playerDetails.nonStriker.balls || 0}b`
+        );
+      }
+      if (data.playerDetails.bowler) {
+        console.log("   - Bowler:", 
+          data.playerDetails.bowler.name, 
+          `${data.playerDetails.bowler.overs || 0}ov/${data.playerDetails.bowler.runsConceded || 0}r/${data.playerDetails.bowler.wickets || 0}w`
+        );
+      }
+    }
+    
+    // ✅ COMPLETE SOCKET PAYLOAD (Optional - for debugging)
+    console.log("🔍 COMPLETE SOCKET PAYLOAD:");
+    console.log(JSON.stringify(liveUpdateData, null, 2));
+    
+    console.log("=".repeat(80));
+  }
+};
     // ✅ OVER HISTORY FORMATTING FUNCTION
     const getFormattedOverHistory = (overHistory) => {
       if (!overHistory || overHistory.length === 0) return [];
