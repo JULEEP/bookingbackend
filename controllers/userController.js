@@ -751,9 +751,29 @@ export const createTeam = async (req, res) => {
 
 export const getAllTeams = async (req, res) => {
   try {
-    const { search } = req.query;
+    const { search, categoryId } = req.query;
 
-    let query = {};
+    // ✅ CASE 1: If categoryId is provided, use GameTeam schema
+    if (categoryId && mongoose.Types.ObjectId.isValid(categoryId)) {
+      const query = { categoryId };
+
+      if (search && search.trim() !== "") {
+        query.teamName = { $regex: new RegExp(search, "i") };
+      }
+
+      const gameTeams = await GameTeam.find(query);
+
+      return res.status(200).json({
+        success: true,
+        total: gameTeams.length,
+        message: "Teams fetched from GameTeam schema successfully",
+        teams: gameTeams,
+        source: "GameTeam"
+      });
+    }
+
+    // ✅ CASE 2: Default — fetch from Team schema
+    const query = {};
 
     if (search && search.trim() !== "") {
       query.teamName = { $regex: new RegExp(search, "i") };
@@ -764,16 +784,20 @@ export const getAllTeams = async (req, res) => {
     return res.status(200).json({
       success: true,
       total: teams.length,
-      message: "Teams fetched successfully",
-      teams, // ✅ players' status will be included from DB
+      message: "Teams fetched from Team schema successfully",
+      teams,
+      source: "Team"
     });
 
   } catch (error) {
     console.error("Error fetching teams:", error);
-    return res.status(500).json({ message: "Server error", error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
-
 
 export const createMatch = async (req, res) => {
   try {
@@ -921,19 +945,38 @@ export const getSingleMatchById = async (req, res) => {
       return res.status(404).json({ success: false, message: "Match not found" });
     }
 
-    // ✅ DEBUG: Check overHistory data
-    console.log("=== OVERHISTORY ANALYSIS ===");
+    // ✅ DEBUG: Detailed overHistory analysis
+    console.log("=== DETAILED OVERHISTORY ANALYSIS ===");
     if (match.scores && match.scores.length > 0) {
       match.scores.forEach((score, index) => {
-        console.log(`Innings ${score.innings || index + 1}:`);
-        console.log(`Total Runs: ${score.runs}, Overs: ${score.overs}`);
+        const inningsNum = score.innings || index + 1;
+        console.log(`🏏 INNINGS ${inningsNum}: Total Runs: ${score.runs}, Overs: ${score.overs}, Wickets: ${score.wickets}`);
         
         if (score.overHistory && score.overHistory.length > 0) {
+          console.log(`   Over History: ${score.overHistory.length} overs`);
           score.overHistory.forEach((over, overIndex) => {
-            console.log(`  Over ${over.overNumber}: ${over.balls?.length || 0} balls, ${over.runs} runs`);
+            console.log(`   Over ${over.overNumber}: ${over.balls?.length || 0} balls, ${over.runs} runs`);
+            
+            if (over.balls && over.balls.length > 0) {
+              over.balls.forEach((ball, ballIndex) => {
+                console.log(`     Ball ${ballIndex + 1}: Striker:${ball.striker}, Runs:${ball.runs}, Wicket:${ball.wicket || 'No'}`);
+              });
+            }
+          });
+        } else {
+          console.log(`   ❌ NO OVER HISTORY FOUND FOR INNINGS ${inningsNum}`);
+        }
+        
+        // ✅ DEBUG CURRENT OVER
+        if (score.currentOver && score.currentOver.balls && score.currentOver.balls.length > 0) {
+          console.log(`   🔥 CURRENT OVER ${score.currentOver.overNumber}: ${score.currentOver.balls.length} balls`);
+          score.currentOver.balls.forEach((ball, ballIndex) => {
+            console.log(`     Ball ${ballIndex + 1}: Striker:${ball.striker}, Runs:${ball.runs}, Wicket:${ball.wicket || 'No'}`);
           });
         }
       });
+    } else {
+      console.log("❌ NO SCORES DATA FOUND IN MATCH");
     }
     console.log("=== END DEBUG ===");
 
@@ -1001,7 +1044,9 @@ export const getSingleMatchById = async (req, res) => {
 
       const playerIdStr = playerId.toString();
       
-      // ✅ ONLY USE OVERHISTORY - IGNORE PLAYERSHISTORY COMPLETELY
+      console.log(`🔍 Calculating batting stats for ${playerNameMap.get(playerIdStr)} in innings ${inningsNumber}`);
+      
+      // ✅ USE ONLY OVERHISTORY (completed overs)
       let runs = 0;
       let balls = 0;
       let fours = 0;
@@ -1011,42 +1056,49 @@ export const getSingleMatchById = async (req, res) => {
 
       if (match.scores && match.scores.length > 0) {
         match.scores.forEach(score => {
-          if ((score.innings || 1) !== inningsNumber) return;
+          const scoreInnings = score.innings || 1;
+          if (scoreInnings !== inningsNumber) return;
           
-          // ✅ ONLY SOURCE OF TRUTH: OVERHISTORY
+          // ✅ SOURCE 1: OVERHISTORY (completed overs) - ONLY THIS
           if (score.overHistory) {
             score.overHistory.forEach(over => {
               if (over.balls) {
                 over.balls.forEach(ball => {
                   const ballStrikerId = ball.striker?.toString();
                   if (ballStrikerId === playerIdStr) {
-                    const ballRuns = ball.runs || 0;
-                    runs += ballRuns;
-                    
-                    // ✅ ONLY COUNT LEGAL DELIVERY BALLS
-                    if (!ball.extraType || (ball.extraType !== 'wide' && ball.extraType !== 'noball')) {
-                      balls += 1;
+                    // ✅ BYE/LEGBYE RUNS BATSMAN KO NAHI MILENGE
+                    if (ball.extraType !== 'bye' && ball.extraType !== 'legbye') {
+                      const ballRuns = ball.runs || 0;
+                      runs += ballRuns;
+                      
+                      if (ballRuns === 4) fours += 1;
+                      if (ballRuns === 6) sixes += 1;
                     }
                     
-                    if (ballRuns === 4) fours += 1;
-                    if (ballRuns === 6) sixes += 1;
+                    // ✅ ONLY COUNT LEGAL DELIVERY BALLS (excluding wides, noballs, byes, legbyes)
+                    if (!ball.extraType || (ball.extraType !== 'wide' && ball.extraType !== 'noball' && ball.extraType !== 'bye' && ball.extraType !== 'legbye')) {
+                      balls += 1;
+                    }
                     
                     // ✅ CHECK WICKET
                     if (ball.wicket && ball.striker?.toString() === playerIdStr) {
                       isOut = true;
                       dismissal = ball.dismissalType || '';
+                      console.log(`   🚨 WICKET from overHistory: ${playerNameMap.get(playerIdStr)} dismissed by ${dismissal}`);
                     }
                   }
                 });
               }
             });
           }
+          
+          // ❌ CURRENTOVER IGNORE KARO - SIRF OVERHISTORY SE DATA LO
         });
       }
 
       const strikeRate = balls > 0 ? parseFloat(((runs / balls) * 100).toFixed(2)) : 0;
 
-      console.log(`📊 OVERHISTORY ONLY - Batsman ${playerNameMap.get(playerIdStr)}: ${runs}r/${balls}b, 4s:${fours}, 6s:${sixes}, Out:${isOut}`);
+      console.log(`📊 OVERHISTORY ONLY STATS - Batsman ${playerNameMap.get(playerIdStr)}: ${runs}r/${balls}b, 4s:${fours}, 6s:${sixes}, Out:${isOut}`);
 
       return {
         runs,
@@ -1064,20 +1116,24 @@ export const getSingleMatchById = async (req, res) => {
       if (!playerId) return null;
 
       const playerIdStr = playerId.toString();
+      console.log(`🔍 Calculating bowling stats for ${playerNameMap.get(playerIdStr)} in innings ${inningsNumber}`);
       
-      // ✅ ONLY USE OVERHISTORY - IGNORE PLAYERSHISTORY COMPLETELY
+      // ✅ USE ONLY OVERHISTORY (completed overs)
       let overs = 0;
       let runsConceded = 0;
       let wickets = 0;
       let maidens = 0;
       let wides = 0;
       let noBalls = 0;
+      let byes = 0;
+      let legByes = 0;
 
       if (match.scores && match.scores.length > 0) {
         match.scores.forEach(score => {
-          if ((score.innings || 1) !== inningsNumber) return;
+          const scoreInnings = score.innings || 1;
+          if (scoreInnings !== inningsNumber) return;
           
-          // ✅ COUNT COMPLETED OVERS FROM OVERHISTORY
+          // ✅ COUNT COMPLETED OVERS FROM OVERHISTORY ONLY
           if (score.overHistory) {
             score.overHistory.forEach(over => {
               if (over.balls && over.balls.length > 0) {
@@ -1089,6 +1145,8 @@ export const getSingleMatchById = async (req, res) => {
                   let overWickets = 0;
                   let overWides = 0;
                   let overNoBalls = 0;
+                  let overByes = 0;
+                  let overLegByes = 0;
                   let isMaiden = true;
                   
                   over.balls.forEach(ball => {
@@ -1104,9 +1162,11 @@ export const getSingleMatchById = async (req, res) => {
                       if (ball.wicket) overWickets += 1;
                       if (ball.extraType === 'wide') overWides += 1;
                       if (ball.extraType === 'noball') overNoBalls += 1;
+                      if (ball.extraType === 'bye') overByes += (ball.runs || 0);
+                      if (ball.extraType === 'legbye') overLegByes += (ball.runs || 0);
                       
                       // ✅ MAIDEN OVER CHECK (no runs excluding extras)
-                      if ((ball.runs || 0) > 0 && ball.extraType !== 'wide' && ball.extraType !== 'noball') {
+                      if ((ball.runs || 0) > 0 && ball.extraType !== 'wide' && ball.extraType !== 'noball' && ball.extraType !== 'bye' && ball.extraType !== 'legbye') {
                         isMaiden = false;
                       }
                     }
@@ -1116,17 +1176,23 @@ export const getSingleMatchById = async (req, res) => {
                   wickets += overWickets;
                   wides += overWides;
                   noBalls += overNoBalls;
+                  byes += overByes;
+                  legByes += overLegByes;
                   if (isMaiden) maidens += 1;
+                  
+                  console.log(`   🎯 Over ${over.overNumber}: ${overRuns}r, ${overWickets}w, Maiden:${isMaiden}`);
                 }
               }
             });
           }
+          
+          // ❌ CURRENTOVER IGNORE KARO - SIRF OVERHISTORY SE DATA LO
         });
       }
 
       const economy = overs > 0 ? parseFloat((runsConceded / overs).toFixed(2)) : 0;
 
-      console.log(`📊 OVERHISTORY ONLY - Bowler ${playerNameMap.get(playerIdStr)}: ${overs}ov, ${runsConceded}r, ${wickets}w, Eco: ${economy}`);
+      console.log(`📊 OVERHISTORY ONLY STATS - Bowler ${playerNameMap.get(playerIdStr)}: ${overs}ov, ${runsConceded}r, ${wickets}w, Eco: ${economy}`);
 
       return {
         overs: parseFloat(overs.toFixed(1)),
@@ -1135,7 +1201,9 @@ export const getSingleMatchById = async (req, res) => {
         maidens,
         economy,
         wides,
-        noBalls
+        noBalls,
+        byes,
+        legByes
       };
     };
 
@@ -1197,6 +1265,8 @@ export const getSingleMatchById = async (req, res) => {
           economy: 0,
           wides: 0,
           noBalls: 0,
+          byes: 0,
+          legByes: 0,
           display: "0-0-0-0",
           detailedDisplay: "0 overs, 0 maidens, 0 runs, 0 wickets"
         };
@@ -1212,12 +1282,14 @@ export const getSingleMatchById = async (req, res) => {
         economy: stats.economy,
         wides: stats.wides,
         noBalls: stats.noBalls,
+        byes: stats.byes,
+        legByes: stats.legByes,
         display: `${stats.overs}-${stats.maidens}-${stats.runsConceded}-${stats.wickets}`,
         detailedDisplay: `${stats.overs} overs, ${stats.maidens} maidens, ${stats.runsConceded} runs, ${stats.wickets} wickets`
       };
     };
 
-    // ✅ ADD STATUS TO TEAM PLAYERS
+    // ✅ ADD STATUS TO TEAM PLAYERS - USE playerStatuses FROM MATCH
     const addStatusToTeamPlayers = (team, isBattingTeam = false) => {
       if (!team || !team.players) return team;
 
@@ -1229,17 +1301,23 @@ export const getSingleMatchById = async (req, res) => {
         teamName: team.teamName,
         players: team.players.map(player => {
           const playerIdStr = player._id.toString();
+          
+          // ✅ FIND PLAYER STATUS FROM match.playerStatuses
+          const playerStatusData = match.playerStatuses?.find(ps => 
+            ps.playerId.toString() === playerIdStr
+          );
+          
           const basePlayer = {
             name: player.name,
             _id: player._id,
-            status: player.status || 'Not Playing'
+            status: playerStatusData?.playerStatus || 'Not Playing' // ✅ USE playerStatus FROM match
           };
 
+          // ✅ ADD STATS BASED ON CURRENT POSITION
           if (isBattingTeam) {
             if (currentPlayers.currentStriker && currentPlayers.currentStriker._id.toString() === playerIdStr) {
               return {
                 ...basePlayer,
-                status: 'Batting (Striker)',
                 stats: currentBatsmenStats.striker ? {
                   runs: currentBatsmenStats.striker.runs,
                   balls: currentBatsmenStats.striker.balls,
@@ -1252,7 +1330,6 @@ export const getSingleMatchById = async (req, res) => {
             } else if (currentPlayers.nonStriker && currentPlayers.nonStriker._id.toString() === playerIdStr) {
               return {
                 ...basePlayer,
-                status: 'Batting (Non-Striker)',
                 stats: currentBatsmenStats.nonStriker ? {
                   runs: currentBatsmenStats.nonStriker.runs,
                   balls: currentBatsmenStats.nonStriker.balls,
@@ -1267,13 +1344,16 @@ export const getSingleMatchById = async (req, res) => {
             if (currentPlayers.currentBowler && currentPlayers.currentBowler._id.toString() === playerIdStr) {
               return {
                 ...basePlayer,
-                status: 'Bowling',
                 stats: currentBowlerStats ? {
                   overs: currentBowlerStats.overs,
                   runs: currentBowlerStats.runs,
                   wickets: currentBowlerStats.wickets,
                   maidens: currentBowlerStats.maidens,
                   economy: currentBowlerStats.economy,
+                  wides: currentBowlerStats.wides,
+                  noBalls: currentBowlerStats.noBalls,
+                  byes: currentBowlerStats.byes,
+                  legByes: currentBowlerStats.legByes,
                   display: currentBowlerStats.display
                 } : null
               };
@@ -1368,14 +1448,14 @@ export const getSingleMatchById = async (req, res) => {
       lastUpdate: new Date().toISOString()
     };
 
-    // ✅ COMPLETE SCORECARD GENERATION - OVERHISTORY ONLY
+    // ✅ UPDATED SCORECARD GENERATION - ALWAYS SHOW BOTH INNINGS
     const generateScorecard = () => {
       const inningsData = [];
-      const totalInnings = match.totalInnings || 2;
+      const totalInnings = 2; // ✅ HAR WAQT 2 INNINGS SHOW KARO
 
-      console.log(`🎯 Generating scorecard from overHistory only...`);
+      console.log(`🎯 Generating scorecard for BOTH innings always...`);
 
-      // ✅ PEHLE SE HI DONO INNINGS BANA DO
+      // ✅ HAR WAQT DONO INNINGS BANAO - CHAHE DATA HO YA NA HO
       for (let inningsNumber = 1; inningsNumber <= totalInnings; inningsNumber++) {
         
         // ✅ FIND EXISTING SCORE DATA FOR THIS INNINGS
@@ -1383,6 +1463,7 @@ export const getSingleMatchById = async (req, res) => {
         
         // ✅ AGAR SCORE DATA NAHI HAI, TOH EMPTY DATA BANAO
         if (!score) {
+          console.log(`🆕 Creating empty score data for innings ${inningsNumber}`);
           score = {
             innings: inningsNumber,
             runs: 0,
@@ -1430,15 +1511,22 @@ export const getSingleMatchById = async (req, res) => {
         const battingData = [];
         const battingTeamPlayers = inningsNumber === 1 ? team1WithStatus.players : team2WithStatus.players;
         
+        console.log(`🔄 Processing batting for innings ${inningsNumber}, ${battingTeamPlayers.length} players`);
+        
         battingTeamPlayers.forEach(teamPlayer => {
           const playerIdStr = teamPlayer._id.toString();
           const playerName = playerNameMap.get(playerIdStr) || teamPlayer.name;
           const playerStats = calculateBattingStats(teamPlayer._id, inningsNumber);
           
-          let status = 'Not Played Yet';
+          // ✅ FIND PLAYER STATUS FROM match.playerStatuses
+          const playerStatusData = match.playerStatuses?.find(ps => 
+            ps.playerId.toString() === playerIdStr
+          );
+          
+          let status = playerStatusData?.playerStatus || 'Not Played Yet'; // ✅ USE playerStatus
           let isNotOut = true;
           let dismissal = '';
-          
+                  
           if (playerStats && (playerStats.runs > 0 || playerStats.balls > 0)) {
             isNotOut = !playerStats.isOut;
             dismissal = playerStats.dismissals || '';
@@ -1483,13 +1571,22 @@ export const getSingleMatchById = async (req, res) => {
         const bowlingData = [];
         const bowlingTeamPlayers = inningsNumber === 1 ? team2WithStatus.players : team1WithStatus.players;
         
+        console.log(`🔄 Processing bowling for innings ${inningsNumber}, ${bowlingTeamPlayers.length} players`);
+        
         bowlingTeamPlayers.forEach(teamPlayer => {
           const playerIdStr = teamPlayer._id.toString();
           const playerName = playerNameMap.get(playerIdStr) || teamPlayer.name;
           const playerStats = calculateBowlingStats(teamPlayer._id, inningsNumber);
+                  
+          // ✅ FIND PLAYER STATUS FROM match.playerStatuses
+          const playerStatusData = match.playerStatuses?.find(ps => 
+            ps.playerId.toString() === playerIdStr
+          );
           
-          let status = 'Not Played Yet';
-          
+          let status = playerStatusData?.playerStatus || 'Not Played Yet'; // ✅ USE playerStatus
+
+
+                  
           if (playerStats && (playerStats.overs > 0 || playerStats.wickets > 0 || playerStats.runsConceded > 0)) {
             if (inningsNumber === match.currentInnings) {
               if (currentPlayers.currentBowler && currentPlayers.currentBowler._id.toString() === playerIdStr) {
@@ -1517,22 +1614,79 @@ export const getSingleMatchById = async (req, res) => {
             economy: playerStats?.economy || 0,
             wides: playerStats?.wides || 0,
             noBalls: playerStats?.noBalls || 0,
+            byes: playerStats?.byes || 0,
+            legByes: playerStats?.legByes || 0,
             status: status
           });
         });
 
-        // ✅ EXTRAS DATA
-        const extras = score.extras || {
-          wides: score.wides || 0,
-          noBalls: score.noBalls || 0,
-          byes: score.byes || 0,
-          legByes: score.legByes || 0,
-          penalties: score.penalties || 0,
-          total: (score.wides || 0) + (score.noBalls || 0) + (score.byes || 0) + (score.legByes || 0) + (score.penalties || 0)
+        // ✅ EXTRAS DATA - OVERHISTORY SE CALCULATE KARO
+        const calculateExtrasFromOverHistory = () => {
+          let wides = 0;
+          let noBalls = 0;
+          let byes = 0;
+          let legByes = 0;
+          let penalties = 0;
+
+          if (score.overHistory) {
+            score.overHistory.forEach(over => {
+              if (over.balls) {
+                over.balls.forEach(ball => {
+                  if (ball.extraType === 'wide') wides += 1;
+                  else if (ball.extraType === 'noball') noBalls += 1;
+                  else if (ball.extraType === 'bye') byes += (ball.runs || 0);
+                  else if (ball.extraType === 'legbye') legByes += (ball.runs || 0);
+                });
+              }
+            });
+          }
+
+          const total = wides + noBalls + byes + legByes + penalties;
+
+          return {
+            wides,
+            noBalls,
+            byes,
+            legByes,
+            penalties,
+            total
+          };
         };
 
-        // ✅ FALL OF WICKETS
-        const fallOfWickets = score.fallOfWickets || [];
+        const extras = calculateExtrasFromOverHistory();
+
+        // ✅ FALL OF WICKETS - OVERHISTORY SE CALCULATE KARO
+        const calculateFallOfWickets = () => {
+          const fallOfWickets = [];
+          let wicketCount = 0;
+
+          if (score.overHistory) {
+            score.overHistory.forEach(over => {
+              if (over.balls) {
+                over.balls.forEach(ball => {
+                  if (ball.wicket && ball.striker) {
+                    wicketCount++;
+                    const batsmanName = playerNameMap.get(ball.striker.toString()) || 'Unknown';
+                    const bowlerName = ball.bowler ? playerNameMap.get(ball.bowler.toString()) : 'Unknown';
+                    
+                    fallOfWickets.push({
+                      batsman: batsmanName,
+                      runs: score.runs || 0, // Total score at that time
+                      wicket: wicketCount,
+                      overs: `${over.overNumber}.${ball.ballNumber}`,
+                      dismissal: ball.dismissalType || 'bowled',
+                      bowler: bowlerName
+                    });
+                  }
+                });
+              }
+            });
+          }
+
+          return fallOfWickets;
+        };
+
+        const fallOfWickets = calculateFallOfWickets();
 
         inningsData.push({
           inningsNumber: inningsNumber,
@@ -1572,7 +1726,9 @@ export const getSingleMatchById = async (req, res) => {
         inningsNumber: inn.inningsNumber,
         battingTeam: inn.battingTeam.name,
         totalRuns: inn.totalRuns,
-        totalWickets: inn.totalWickets
+        totalWickets: inn.totalWickets,
+        battingPlayers: inn.batting.length,
+        bowlingPlayers: inn.bowling.length
       })));
 
       return {
@@ -1581,106 +1737,102 @@ export const getSingleMatchById = async (req, res) => {
       };
     };
 
-
-
-
     // ✅ MVP Leaderboard + Top Performers (for UI)
-const calculateMVPLeaderboard = (scorecard) => {
-  if (!scorecard || !scorecard.innings) return { playerPoints: [], topPerformers: {} };
+    const calculateMVPLeaderboard = (scorecard) => {
+      if (!scorecard || !scorecard.innings) return { playerPoints: [], topPerformers: {} };
 
-  const playerStatsMap = new Map();
+      const playerStatsMap = new Map();
 
-  scorecard.innings.forEach(inn => {
-    // 🏏 Batting
-    inn.batting.forEach(bat => {
-      const pid = bat.playerId?.toString();
-      if (!pid) return;
-      if (!playerStatsMap.has(pid)) {
-        playerStatsMap.set(pid, {
-          name: bat.playerName,
-          runs: 0,
-          wickets: 0,
-          points: 0
+      scorecard.innings.forEach(inn => {
+        // 🏏 Batting
+        inn.batting.forEach(bat => {
+          const pid = bat.playerId?.toString();
+          if (!pid) return;
+          if (!playerStatsMap.has(pid)) {
+            playerStatsMap.set(pid, {
+              name: bat.playerName,
+              runs: 0,
+              wickets: 0,
+              points: 0
+            });
+          }
+          const ps = playerStatsMap.get(pid);
+          ps.runs += bat.runs;
+
+          // ✅ Run-based proportional points (0.5 per run)
+          ps.points += bat.runs * 0.5;
+
+          // ✅ Bonus points
+          if (bat.runs >= 50) ps.points += 4;
+          if (bat.runs >= 100) ps.points += 8;
+          ps.points += (bat.fours || 0) + (bat.sixes || 0) * 2;
         });
-      }
-      const ps = playerStatsMap.get(pid);
-      ps.runs += bat.runs;
 
-      // ✅ Run-based proportional points (0.5 per run)
-      ps.points += bat.runs * 0.5;
+        // 🎯 Bowling
+        inn.bowling.forEach(bowl => {
+          const pid = bowl.playerId?.toString();
+          if (!pid) return;
+          if (!playerStatsMap.has(pid)) {
+            playerStatsMap.set(pid, {
+              name: bowl.playerName,
+              runs: 0,
+              wickets: 0,
+              points: 0
+            });
+          }
+          const ps = playerStatsMap.get(pid);
+          ps.wickets += bowl.wickets;
 
-      // ✅ Bonus points
-      if (bat.runs >= 50) ps.points += 4;
-      if (bat.runs >= 100) ps.points += 8;
-      ps.points += (bat.fours || 0) + (bat.sixes || 0) * 2;
-    });
-
-    // 🎯 Bowling
-    inn.bowling.forEach(bowl => {
-      const pid = bowl.playerId?.toString();
-      if (!pid) return;
-      if (!playerStatsMap.has(pid)) {
-        playerStatsMap.set(pid, {
-          name: bowl.playerName,
-          runs: 0,
-          wickets: 0,
-          points: 0
+          // ✅ Bowling points
+          ps.points += bowl.wickets * 10;
+          if (bowl.wickets >= 3) ps.points += 4;
+          if (bowl.wickets >= 5) ps.points += 8;
+          if (bowl.economy && bowl.economy <= 4) ps.points += 4;
         });
-      }
-      const ps = playerStatsMap.get(pid);
-      ps.wickets += bowl.wickets;
+      });
 
-      // ✅ Bowling points
-      ps.points += bowl.wickets * 10;
-      if (bowl.wickets >= 3) ps.points += 4;
-      if (bowl.wickets >= 5) ps.points += 8;
-      if (bowl.economy && bowl.economy <= 4) ps.points += 4;
-    });
-  });
+      const allPlayers = Array.from(playerStatsMap.values());
 
-  const allPlayers = Array.from(playerStatsMap.values());
+      // 🏆 Identify top performers
+      const bestBatsman = allPlayers.reduce((max, p) => (p.runs > (max?.runs || 0) ? p : max), null);
+      const bestBowler = allPlayers.reduce((max, p) => (p.wickets > (max?.wickets || 0) ? p : max), null);
+      const bestAllRounder = allPlayers.reduce((best, p) => {
+        const score = (p.runs >= 30 ? p.runs / 10 : 0) + (p.wickets * 5);
+        const bestScore = (best ? (best.runs / 10 + best.wickets * 5) : 0);
+        return score > bestScore ? p : best;
+      }, null);
 
-  // 🏆 Identify top performers
-  const bestBatsman = allPlayers.reduce((max, p) => (p.runs > (max?.runs || 0) ? p : max), null);
-  const bestBowler = allPlayers.reduce((max, p) => (p.wickets > (max?.wickets || 0) ? p : max), null);
-  const bestAllRounder = allPlayers.reduce((best, p) => {
-    const score = (p.runs >= 30 ? p.runs / 10 : 0) + (p.wickets * 5);
-    const bestScore = (best ? (best.runs / 10 + best.wickets * 5) : 0);
-    return score > bestScore ? p : best;
-  }, null);
+      // 🔢 Sort players by points
+      const sortedPlayers = allPlayers.sort((a, b) => b.points - a.points);
 
-  // 🔢 Sort players by points
-  const sortedPlayers = allPlayers.sort((a, b) => b.points - a.points);
+      // 🧾 Format player points section
+      const playerPoints = sortedPlayers.map((p, i) => ({
+        rank: i + 1,
+        player: p.name,
+        runs: p.runs,
+        wickets: p.wickets,
+        points: parseFloat(p.points.toFixed(1))
+      }));
 
-  // 🧾 Format player points section
-  const playerPoints = sortedPlayers.map((p, i) => ({
-    rank: i + 1,
-    player: p.name,
-    runs: p.runs,
-    wickets: p.wickets,
-    points: parseFloat(p.points.toFixed(1))
-  }));
+      // 🎯 Top Performers section
+      const topPerformers = {
+        bestBatsman: bestBatsman ? { player: bestBatsman.name, runs: bestBatsman.runs } : null,
+        bestBowler: bestBowler ? { player: bestBowler.name, wickets: bestBowler.wickets } : null,
+        bestAllRounder: bestAllRounder ? { player: bestAllRounder.name, runs: bestAllRounder.runs, wickets: bestAllRounder.wickets } : null
+      };
 
-  // 🎯 Top Performers section
-  const topPerformers = {
-    bestBatsman: bestBatsman ? { player: bestBatsman.name, runs: bestBatsman.runs } : null,
-    bestBowler: bestBowler ? { player: bestBowler.name, wickets: bestBowler.wickets } : null,
-    bestAllRounder: bestAllRounder ? { player: bestAllRounder.name, runs: bestAllRounder.runs, wickets: bestAllRounder.wickets } : null
-  };
-
-  // 👑 Final structure
-  return {
-    playerPoints,
-    topPerformers
-  };
-};
-
+      // 👑 Final structure
+      return {
+        playerPoints,
+        topPerformers
+      };
+    };
 
     const scorecard = generateScorecard();
     const mvpLeaderboard = calculateMVPLeaderboard(scorecard);
 
     // ✅ FINAL RESPONSE
-    return res.status(200).json({
+    const responseData = {
       success: true,
       match: {
         ...match._doc,
@@ -1688,15 +1840,28 @@ const calculateMVPLeaderboard = (scorecard) => {
         team2: team2WithStatus,
         scorecard: scorecard,
         liveData: liveData,
-        mvpLeaderboard, // 👈 contains both "Player Points" + "Top Performers"
+        mvpLeaderboard,
         currentPlayers: {
           striker: currentBatsmenStats.striker,
           nonStriker: currentBatsmenStats.nonStriker,
           bowler: currentBowlerStats
-        }
+        },
       }
-    });
+    };
 
+    // ✅ SOCKET.IO EMIT - ADDED HERE
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("live-match-update", {
+        type: "MATCH_FETCHED",
+        matchId: id,
+        data: responseData,
+        timestamp: new Date().toISOString()
+      });
+      console.log("📡 Socket emit: live-match-update - MATCH_FETCHED");
+    }
+
+    return res.status(200).json(responseData);
   } catch (error) {
     console.error("Error fetching single match:", error);
     return res.status(500).json({
@@ -1739,6 +1904,10 @@ export const getSingleMatch = async (req, res) => {
     return res.status(500).json({ message: "Server error", error: error.message });
   }
 };
+
+
+
+
 export const startMatch = async (req, res) => {
   try {
     const { matchId, userId } = req.params;
@@ -1768,67 +1937,92 @@ export const startMatch = async (req, res) => {
     // Validate required fields
     if (!tossWinner || !electedTo || !striker || !nonStriker || !bowler || !bowlingStyle) {
       return res.status(400).json({
-        message: "All fields are required: tossWinner, electedTo, striker, nonStriker, bowler, bowlingStyle",
+        message: "Missing required fields: tossWinner, electedTo, striker, nonStriker, bowler, bowlingStyle",
       });
     }
 
-    // Update match basic info
+    // Update match info
     match.status = "Live";
     match.toss = {
       winner: tossWinner,
       elected: electedTo,
     };
-    match.opening = {
-      striker,
-      nonStriker,
-    };
-    match.bowling = {
-      bowler,
-      style: bowlingStyle,
-    };
+    match.currentStriker = striker;
+    match.nonStriker = nonStriker;
+    match.currentBowler = bowler;
+    match.bowling = { style: bowlingStyle };
+    match.currentInnings = 1;
 
-    // 🔄 Update players' statuses
-    for (let teamId of [match.team1, match.team2]) {
-      const team = await Team.findById(teamId);
-      if (!team) continue;
+    // Prepare playerStatuses
+    const playerStatuses = [];
 
-      team.players = team.players.map((player) => {
-        const playerId = player._id.toString();
-
-        if (playerId === striker) {
-          return { ...player.toObject(), status: "Batting (Striker)" };
-        } else if (playerId === nonStriker) {
-          return { ...player.toObject(), status: "Batting (Non-Striker)" };
-        } else if (playerId === bowler) {
-          return { ...player.toObject(), status: "Bowling" };
-        } else {
-          return player;
-        }
-      });
-
-      await team.save();
-    }
-
-    // Save updated match
-    await match.save();
-
-    // Fetch updated match & teams
     const team1 = await Team.findById(match.team1);
     const team2 = await Team.findById(match.team2);
 
+    if (!team1 || !team2) {
+      return res.status(404).json({ message: "One or both teams not found" });
+    }
+
+    // Decide battingTeam and bowlingTeam
+    const battingTeamId = electedTo === 'Bat' ? tossWinner : (tossWinner === match.team1.toString() ? match.team2 : match.team1);
+    const bowlingTeamId = battingTeamId === match.team1.toString() ? match.team2.toString() : match.team1.toString();
+
+    const teams = [
+      { team: team1, isBattingTeam: team1._id.toString() === battingTeamId },
+      { team: team2, isBattingTeam: team2._id.toString() === battingTeamId },
+    ];
+
+    // Loop through both teams and assign playerStatuses accordingly
+    for (const { team, isBattingTeam } of teams) {
+      for (const player of team.players) {
+        let playerStatus = "";
+
+        if (isBattingTeam) {
+          if (player._id.toString() === striker) {
+            playerStatus = "Batting (Striker)";
+          } else if (player._id.toString() === nonStriker) {
+            playerStatus = "Batting (Non-Striker)";
+          } else {
+            playerStatus = "Yet to Bat";
+          }
+        } else {
+          if (player._id.toString() === bowler) {
+            playerStatus = "Bowling";
+          } else {
+            playerStatus = "Fielding";
+          }
+        }
+
+        playerStatuses.push({
+          playerId: player._id,
+          teamId: team._id,
+          playerName: player.name,
+          playerStatus,
+        });
+      }
+    }
+
+    // Save to match
+    match.playerStatuses = playerStatuses;
+    await match.save();
+
+    // Send response
     return res.status(200).json({
       success: true,
       message: "Match started successfully",
       match: {
         _id: match._id,
-        toss: match.toss,
         status: match.status,
-        opening: match.opening,
+        toss: match.toss,
+        currentInnings: match.currentInnings,
+        currentStriker: match.currentStriker,
+        nonStriker: match.nonStriker,
+        currentBowler: match.currentBowler,
         bowling: match.bowling,
         matchFormat: match.matchFormat,
         inningStatus: match.inningStatus,
-        currentInnings: match.currentInnings || 1,
         totalInnings: match.totalInnings,
+        playerStatuses: match.playerStatuses,
         team1: {
           _id: team1._id,
           teamName: team1.teamName,
@@ -1838,13 +2032,17 @@ export const startMatch = async (req, res) => {
           _id: team2._id,
           teamName: team2.teamName,
           players: team2.players,
-        }
-      }
+        },
+      },
     });
 
   } catch (error) {
     console.error("Error starting match:", error);
-    return res.status(500).json({ message: "Server error", error: error.message });
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message,
+    });
   }
 };
 
@@ -1896,13 +2094,15 @@ export const createTournament = async (req, res) => {
       endDate,
       registrationEndDate,
       location,
-      locationName, // ✅ new field
+      locationName,
       numberOfTeams,
       format,
       tournamentType,
       rules,
       prizes,
-      price
+      price,
+      gameType,      // ✅ New field
+      categoryId     // ✅ Conditional field
     } = req.body;
 
     // ✅ Validate userId
@@ -1910,30 +2110,35 @@ export const createTournament = async (req, res) => {
       return res.status(400).json({ message: "Invalid user ID" });
     }
 
-    // ✅ Optional: Check if user exists
+    // ✅ Check user exists
     const user = await User.findById(userId);
     if (!user) {
       return res.status(404).json({ message: "User not found" });
     }
 
-    // ✅ Required fields check
-    if (
-      !name || !startDate || !endDate || !registrationEndDate ||
-      !location || !location.lat || !location.lng ||
-      !locationName || // ✅ ensure locationName is provided
-      !numberOfTeams || !format || !tournamentType
-    ) {
-      return res.status(400).json({ message: "Missing required fields" });
-    }
+    // ✅ Check required fields
 
-    // ✅ If tournamentType is 'paid', price must be provided
+    // ✅ If tournamentType is 'paid', price is required
     if (tournamentType === 'paid' && (price === undefined || price === null)) {
       return res.status(400).json({ message: "Price is required for paid tournaments" });
     }
 
-    // ✅ If tournamentType is 'free', force price to null
+    // ✅ If gameType !== 'cricket', categoryId is required and must be valid
+    if (gameType.toLowerCase() !== 'cricket') {
+      if (!categoryId || !mongoose.Types.ObjectId.isValid(categoryId)) {
+        return res.status(400).json({ message: "Valid categoryId is required for non-cricket games" });
+      }
+
+      const categoryExists = await GameCategory.findById(categoryId);
+      if (!categoryExists) {
+        return res.status(404).json({ message: "Game category not found" });
+      }
+    }
+
+    // ✅ Set price
     const finalPrice = tournamentType === 'free' ? null : price;
 
+    // ✅ Create tournament
     const newTournament = new Tournament({
       name,
       description,
@@ -1941,14 +2146,16 @@ export const createTournament = async (req, res) => {
       endDate,
       registrationEndDate,
       location,
-      locationName, // ✅ include in document
+      locationName,
       numberOfTeams,
       format,
       tournamentType,
       price: finalPrice,
       rules,
       prizes,
-      createdBy: userId
+      createdBy: userId,
+      gameType,
+      categoryId: gameType.toLowerCase() === 'cricket' ? null : categoryId // ✅ Save only if needed
     });
 
     await newTournament.save();
@@ -1961,10 +2168,12 @@ export const createTournament = async (req, res) => {
 
   } catch (error) {
     console.error("Error creating tournament:", error);
-    return res.status(500).json({ message: "Server error", error: error.message });
+    return res.status(500).json({
+      message: "Server error",
+      error: error.message
+    });
   }
 };
-
 
 
 export const getAllTournaments = async (req, res) => {
@@ -2113,6 +2322,33 @@ export const updateLiveScore = async (req, res) => {
       return res.status(404).json({ success: false, message: "Match not found" });
     }
 
+    // ✅ SOCKET.IO EMIT FUNCTION - Har update ke baad call karo
+    const emitLiveUpdate = (updateType, message, additionalData = {}) => {
+      const io = req.app.get("io");
+      if (io) {
+        const updateData = {
+          type: updateType,
+          matchId: id,
+          innings: innings,
+          message: message,
+          data: {
+            score: `${match.runs || 0}/${match.wickets || 0}`,
+            overs: match.overs || 0,
+            runRate: match.runRate || 0,
+            currentStriker: match.currentStriker,
+            currentBowler: match.currentBowler,
+            target: match.target,
+            status: match.status,
+            ...additionalData
+          },
+          timestamp: new Date().toISOString()
+        };
+
+        io.emit("live-match-update", updateData);
+        console.log(`📡 Socket emit: live-match-update - ${updateType}`);
+      }
+    };
+
     // ✅ OVER HISTORY FORMATTING FUNCTION
     const getFormattedOverHistory = (overHistory) => {
       if (!overHistory || overHistory.length === 0) return [];
@@ -2127,6 +2363,156 @@ export const updateLiveScore = async (req, res) => {
         
         return `Over ${over.overNumber}: ${over.runs} runs - ${ballNumbers.join(', ')}`;
       });
+    };
+
+    // ✅ PLAYER DETAILS FUNCTION - STRIKER, NON-STRIKER, BOWLER KA DATA LAO
+    const getPlayerDetails = async (strikerId, nonStrikerId, bowlerId) => {
+      const playerDetails = {};
+      
+      // Striker details
+      if (strikerId) {
+        for (let teamId of [match.team1, match.team2]) {
+          const team = await Team.findById(teamId);
+          if (team) {
+            const player = team.players.find(p => p._id.toString() === strikerId.toString());
+            if (player) {
+              playerDetails.striker = {
+                id: player._id,
+                name: player.name,
+                runs: 0,
+                balls: 0,
+                fours: 0,
+                sixes: 0,
+                strikeRate: 0
+              };
+              break;
+            }
+          }
+        }
+      }
+      
+      // Non-striker details
+      if (nonStrikerId) {
+        for (let teamId of [match.team1, match.team2]) {
+          const team = await Team.findById(teamId);
+          if (team) {
+            const player = team.players.find(p => p._id.toString() === nonStrikerId.toString());
+            if (player) {
+              playerDetails.nonStriker = {
+                id: player._id,
+                name: player.name,
+                runs: 0,
+                balls: 0,
+                fours: 0,
+                sixes: 0,
+                strikeRate: 0
+              };
+              break;
+            }
+          }
+        }
+      }
+      
+      // Bowler details
+      if (bowlerId) {
+        for (let teamId of [match.team1, match.team2]) {
+          const team = await Team.findById(teamId);
+          if (team) {
+            const player = team.players.find(p => p._id.toString() === bowlerId.toString());
+            if (player) {
+              playerDetails.bowler = {
+                id: player._id,
+                name: player.name,
+                overs: 0,
+                maidens: 0,
+                runsConceded: 0,
+                wickets: 0,
+                economy: 0
+              };
+              break;
+            }
+          }
+        }
+      }
+      
+      return playerDetails;
+    };
+
+    // ✅ UPDATE PLAYER DETAILS WITH STATS
+    const updatePlayerDetailsWithStats = (playerDetails, playersHistory) => {
+      if (playerDetails.striker) {
+        const strikerStats = playersHistory.find(p => 
+          p.playerId && p.playerId.toString() === playerDetails.striker.id.toString()
+        );
+        if (strikerStats) {
+          playerDetails.striker.runs = strikerStats.runs || 0;
+          playerDetails.striker.balls = strikerStats.balls || 0;
+          playerDetails.striker.fours = strikerStats.fours || 0;
+          playerDetails.striker.sixes = strikerStats.sixes || 0;
+          playerDetails.striker.strikeRate = strikerStats.strikeRate || 0;
+        }
+      }
+      
+      if (playerDetails.nonStriker) {
+        const nonStrikerStats = playersHistory.find(p => 
+          p.playerId && p.playerId.toString() === playerDetails.nonStriker.id.toString()
+        );
+        if (nonStrikerStats) {
+          playerDetails.nonStriker.runs = nonStrikerStats.runs || 0;
+          playerDetails.nonStriker.balls = nonStrikerStats.balls || 0;
+          playerDetails.nonStriker.fours = nonStrikerStats.fours || 0;
+          playerDetails.nonStriker.sixes = nonStrikerStats.sixes || 0;
+          playerDetails.nonStriker.strikeRate = nonStrikerStats.strikeRate || 0;
+        }
+      }
+      
+      if (playerDetails.bowler) {
+        const bowlerStats = playersHistory.find(p => 
+          p.playerId && p.playerId.toString() === playerDetails.bowler.id.toString()
+        );
+        if (bowlerStats) {
+          playerDetails.bowler.overs = bowlerStats.overs || 0;
+          playerDetails.bowler.maidens = bowlerStats.maidens || 0;
+          playerDetails.bowler.runsConceded = bowlerStats.runsConceded || 0;
+          playerDetails.bowler.wickets = bowlerStats.wickets || 0;
+          playerDetails.bowler.economy = bowlerStats.economy || 0;
+        }
+      }
+      
+      return playerDetails;
+    };
+
+    // ✅ UPDATE PLAYER STATUSES FUNCTION
+    const updatePlayerStatus = (playerId, newStatus) => {
+      if (!playerId || !match.playerStatuses) return;
+      
+      const playerStatusIndex = match.playerStatuses.findIndex(ps => 
+        ps.playerId.toString() === playerId.toString()
+      );
+      
+      if (playerStatusIndex !== -1) {
+        match.playerStatuses[playerStatusIndex].playerStatus = newStatus;
+        console.log(`🎯 PlayerStatus updated: ${playerId} -> ${newStatus}`);
+      } else {
+        // Agar playerStatuses mein nahi hai to add karo
+        const teamId = [match.team1, match.team2].find(teamId => {
+          const team = Team.findById(teamId);
+          if (team) {
+            return team.players.find(p => p._id.toString() === playerId.toString());
+          }
+          return false;
+        });
+        
+        if (teamId) {
+          match.playerStatuses.push({
+            playerId: playerId,
+            teamId: teamId,
+            playerName: "Player", // Name baad mein update hoga
+            playerStatus: newStatus
+          });
+          console.log(`🎯 New PlayerStatus added: ${playerId} -> ${newStatus}`);
+        }
+      }
     };
 
     // ✅ 1. MATCH STATUS UPDATE
@@ -2145,11 +2531,30 @@ export const updateLiveScore = async (req, res) => {
       const scoreData = match.scores[currentInningsIndex];
       const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
       
+      // ✅ PLAYER DETAILS ADD KARO RESPONSE MEIN
+      const playerDetails = await getPlayerDetails(
+        match.currentStriker, 
+        match.nonStriker, 
+        match.currentBowler
+      );
+      const updatedPlayerDetails = updatePlayerDetailsWithStats(
+        playerDetails, 
+        match.playersHistory.find(inn => inn.innings === innings)?.players || []
+      );
+
+      // ✅ SOCKET EMIT
+      emitLiveUpdate("MATCH_STATUS_UPDATE", `Match status updated to ${matchStatus}`, {
+        matchStatus: matchStatus,
+        startTime: match.startTime,
+        endTime: match.endTime
+      });
+      
       return res.status(200).json({
         success: true,
         message: `Match status updated to ${matchStatus}`,
         match: match,
-        overHistory: formattedOverHistory
+        overHistory: formattedOverHistory,
+        playerDetails: updatedPlayerDetails
       });
     }
 
@@ -2178,6 +2583,16 @@ export const updateLiveScore = async (req, res) => {
         match.wickets = 0;
         match.overs = 0;
         match.runRate = 0;
+        
+        // ✅ PLAYERSTATUSES RESET FOR INNINGS BREAK
+        if (match.playerStatuses) {
+          match.playerStatuses.forEach(status => {
+            if (status.playerStatus.includes('Batting')) {
+              status.playerStatus = "Fielding";
+            }
+          });
+          console.log(`🎯 PlayerStatuses reset for innings break`);
+        }
         
       } else if (inningStatus === 'second innings') {
         console.log(`🎯 Second innings starting...`);
@@ -2253,23 +2668,26 @@ export const updateLiveScore = async (req, res) => {
         
         const firstInningsBattingTeam = match.scores[0] ? match.team1 : null;
         const battingTeam = firstInningsBattingTeam === match.team1 ? match.team2 : match.team1;
-        const bowlingTeam = firstInningsBattingTeam === match.team1 ? match.team1 : match.team2;
+        const bowlingTeam = firstInningsBattingTeam === match.team1 ? match.team1 : match.team1;
         
         console.log(`🎯 Batting Team: ${battingTeam}, Bowling Team: ${bowlingTeam}`);
         
         // ✅ FIX: TUMHARE PAYLOAD KE STRIKER/NON-STRIKER/BOWLER USE KARO
         if (striker) {
           match.currentStriker = striker;
+          updatePlayerStatus(striker, "Batting (Striker)");
           console.log(`🎯 Striker set from payload: ${striker}`);
         }
         
         if (nonStriker) {
           match.nonStriker = nonStriker;
+          updatePlayerStatus(nonStriker, "Batting (Non-Striker)");
           console.log(`🎯 Non-Striker set from payload: ${nonStriker}`);
         }
         
         if (bowler) {
           match.currentBowler = bowler;
+          updatePlayerStatus(bowler, "Bowling");
           console.log(`🎯 Bowler set from payload: ${bowler}`);
         }
         
@@ -2339,14 +2757,33 @@ export const updateLiveScore = async (req, res) => {
       const scoreData = match.scores[currentInningsIndex];
       const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
       
+      // ✅ PLAYER DETAILS ADD KARO RESPONSE MEIN
+      const playerDetails = await getPlayerDetails(
+        match.currentStriker, 
+        match.nonStriker, 
+        match.currentBowler
+      );
+      const updatedPlayerDetails = updatePlayerDetailsWithStats(
+        playerDetails, 
+        match.playersHistory.find(inn => inn.innings === innings)?.players || []
+      );
+      
       console.log(`✅ Inning status updated to ${inningStatus}, continuing with player updates...`);
+      
+      // ✅ SOCKET EMIT
+      emitLiveUpdate("INNINGS_STATUS_UPDATE", `Innings status updated to ${inningStatus}`, {
+        inningStatus: inningStatus,
+        currentInnings: match.currentInnings,
+        target: match.target
+      });
       
       return res.status(200).json({
         success: true,
         message: `Inning status updated to ${inningStatus}`,
         match: match,
         overHistory: formattedOverHistory,
-        target: match.target
+        target: match.target,
+        playerDetails: updatedPlayerDetails
       });
     }
 
@@ -2357,6 +2794,16 @@ export const updateLiveScore = async (req, res) => {
       const temp = match.currentStriker;
       match.currentStriker = match.nonStriker;
       match.nonStriker = temp;
+
+      // ✅ PLAYERSTATUSES UPDATE KARO
+      if (match.currentStriker) {
+        updatePlayerStatus(match.currentStriker, "Batting (Striker)");
+      }
+      if (match.nonStriker) {
+        updatePlayerStatus(match.nonStriker, "Batting (Non-Striker)");
+      }
+      
+      console.log(`✅ PlayerStatuses swapped: ${match.currentStriker} -> Striker, ${match.nonStriker} -> Non-Striker`);
       
       // Team schema mein bhi update karo
       for (let teamId of [match.team1, match.team2]) {
@@ -2384,17 +2831,38 @@ export const updateLiveScore = async (req, res) => {
       const scoreData = match.scores[currentInningsIndex];
       const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
       
+      // ✅ PLAYER DETAILS ADD KARO RESPONSE MEIN
+      const playerDetails = await getPlayerDetails(
+        match.currentStriker, 
+        match.nonStriker, 
+        match.currentBowler
+      );
+      const updatedPlayerDetails = updatePlayerDetailsWithStats(
+        playerDetails, 
+        match.playersHistory.find(inn => inn.innings === innings)?.players || []
+      );
+
+      // ✅ SOCKET EMIT
+      emitLiveUpdate("PLAYERS_SWAPPED", "Striker and non-striker swapped", {
+        currentStriker: match.currentStriker,
+        currentNonStriker: match.nonStriker
+      });
+      
       return res.status(200).json({
         success: true,
         message: "Striker swapped successfully",
         match: match,
-        overHistory: formattedOverHistory
+        overHistory: formattedOverHistory,
+        playerDetails: updatedPlayerDetails
       });
     }
 
     // ✅ 4. BOWLER CHANGE
     if (bowler && changeBowler) {
       match.currentBowler = bowler;
+      
+      // ✅ PLAYERSTATUSES UPDATE KARO
+      updatePlayerStatus(bowler, "Bowling");
       
       // Team schema mein bowler status update karo
       for (let teamId of [match.team1, match.team2]) {
@@ -2405,6 +2873,8 @@ export const updateLiveScore = async (req, res) => {
           const playerId = player._id.toString();
 
           if (player.status === "Bowling") {
+            // Purane bowler ko Fielding karo
+            updatePlayerStatus(player._id, "Fielding");
             return { ...player.toObject(), status: "Fielding" };
           }
           else if (playerId === bowler.toString()) {
@@ -2423,11 +2893,28 @@ export const updateLiveScore = async (req, res) => {
       const scoreData = match.scores[currentInningsIndex];
       const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
       
+      // ✅ PLAYER DETAILS ADD KARO RESPONSE MEIN
+      const playerDetails = await getPlayerDetails(
+        match.currentStriker, 
+        match.nonStriker, 
+        match.currentBowler
+      );
+      const updatedPlayerDetails = updatePlayerDetailsWithStats(
+        playerDetails, 
+        match.playersHistory.find(inn => inn.innings === innings)?.players || []
+      );
+
+      // ✅ SOCKET EMIT
+      emitLiveUpdate("BOWLER_CHANGED", "Bowler changed successfully", {
+        currentBowler: match.currentBowler
+      });
+      
       return res.status(200).json({
         success: true,
         message: "Bowler changed successfully",
         match: match,
-        overHistory: formattedOverHistory
+        overHistory: formattedOverHistory,
+        playerDetails: updatedPlayerDetails
       });
     }
 
@@ -2463,7 +2950,7 @@ export const updateLiveScore = async (req, res) => {
         if (lastOver.balls.length > 0) {
           lastBall = lastOver.balls.pop();
           
-          // Agar last over empty ho gaya, to use remove karo
+          // ✅ OVERHISTORY SE BHI REMOVE KARO - JAISE SCORES MEIN KIA HAI
           if (lastOver.balls.length === 0) {
             scoreData.overHistory.pop();
           }
@@ -2536,6 +3023,14 @@ export const updateLiveScore = async (req, res) => {
           }
         }
 
+        // ✅ PLAYERSTATUSES UNDO KARO
+        if (lastBall.striker) {
+          updatePlayerStatus(lastBall.striker, "Batting (Striker)");
+        }
+        if (lastBall.newBatsman) {
+          updatePlayerStatus(lastBall.newBatsman, "Fielding");
+        }
+
         // Team schema mein player status undo karo
         for (let teamId of [match.team1, match.team2]) {
           const team = await Team.findById(teamId);
@@ -2569,7 +3064,10 @@ export const updateLiveScore = async (req, res) => {
             p.playerId && p.playerId.toString() === lastBall.striker.toString()
           );
           if (strikerStats) {
-            strikerStats.runs -= (lastBall.runs || 0);
+            // ✅ BYE/LEGBYE RUNS BATSMAN KE RUNS SE SUBTRACT MAT KARO
+            if (lastBall.extraType !== 'bye' && lastBall.extraType !== 'legbye') {
+              strikerStats.runs -= (lastBall.runs || 0);
+            }
             if (lastBall.extraType !== 'wide' && lastBall.extraType !== 'noball') {
               strikerStats.balls -= 1;
             }
@@ -2591,6 +3089,10 @@ export const updateLiveScore = async (req, res) => {
             } else if (lastBall.extraType === 'wide') {
               runsConcededToSubtract += 1;
               bowlerStats.wides -= 1;
+            } else if (lastBall.extraType === 'bye') {
+              bowlerStats.byes -= (lastBall.runs || 0);
+            } else if (lastBall.extraType === 'legbye') {
+              bowlerStats.legByes -= (lastBall.runs || 0);
             }
             
             bowlerStats.runsConceded -= runsConcededToSubtract;
@@ -2622,6 +3124,14 @@ export const updateLiveScore = async (req, res) => {
         if (lastBall.wicket) currentOverInHistory.wickets -= 1;
         if (lastBall.extraType === 'wide') currentOverInHistory.wides -= 1;
         if (lastBall.extraType === 'noball') currentOverInHistory.noBalls -= 1;
+        
+        // ✅ OVERHISTORY SE BHI BALL REMOVE KARO
+        const ballIndex = currentOverInHistory.balls.findIndex(ball => 
+          ball.ballNumber === lastBall.ballNumber
+        );
+        if (ballIndex !== -1) {
+          currentOverInHistory.balls.splice(ballIndex, 1);
+        }
       }
 
       // ✅ OVERS COUNT UNDO
@@ -2661,6 +3171,7 @@ export const updateLiveScore = async (req, res) => {
       match.markModified('runRate');
       match.markModified('currentStriker');
       match.markModified('commentary');
+      match.markModified('playerStatuses');
 
       console.log(`⏪ Undo completed. New score: ${scoreData.runs}/${scoreData.wickets} in ${scoreData.overs} overs`);
       
@@ -2669,11 +3180,29 @@ export const updateLiveScore = async (req, res) => {
       // ✅ FORMATTED OVER HISTORY SEND KARO
       const formattedOverHistory = getFormattedOverHistory(scoreData.overHistory);
       
+      // ✅ PLAYER DETAILS ADD KARO RESPONSE MEIN
+      const playerDetails = await getPlayerDetails(
+        match.currentStriker, 
+        match.nonStriker, 
+        match.currentBowler
+      );
+      const updatedPlayerDetails = updatePlayerDetailsWithStats(
+        playerDetails, 
+        match.playersHistory.find(inn => inn.innings === innings)?.players || []
+      );
+
+      // ✅ SOCKET EMIT
+      emitLiveUpdate("BALL_UNDONE", "Last ball undone", {
+        score: `${savedMatch.runs || 0}/${savedMatch.wickets || 0}`,
+        overs: savedMatch.overs || 0
+      });
+      
       return res.status(200).json({
         success: true,
         message: "Last ball undone successfully",
         match: savedMatch,
-        overHistory: formattedOverHistory
+        overHistory: formattedOverHistory,
+        playerDetails: updatedPlayerDetails
       });
     }
 
@@ -2722,16 +3251,19 @@ export const updateLiveScore = async (req, res) => {
       if (striker && !match.currentStriker) {
         console.log(`🆕 Setting initial striker: ${striker}`);
         match.currentStriker = striker;
+        updatePlayerStatus(striker, "Batting (Striker)");
       }
       
       if (nonStriker && !match.nonStriker) {
         console.log(`🆕 Setting initial non-striker: ${nonStriker}`);
         match.nonStriker = nonStriker;
+        updatePlayerStatus(nonStriker, "Batting (Non-Striker)");
       }
       
       if (bowler && !match.currentBowler) {
         console.log(`🆕 Setting initial bowler: ${bowler}`);
         match.currentBowler = bowler;
+        updatePlayerStatus(bowler, "Bowling");
       }
 
       // ✅ SIMPLER SOLUTION: Ball number calculation based on ball count
@@ -2745,232 +3277,252 @@ export const updateLiveScore = async (req, res) => {
       };
 
       // ✅ IMPROVED PLAYER UPDATE FUNCTION WITH VALIDATION
-     // ✅ IMPROVED PLAYER UPDATE FUNCTION WITH VALIDATION
-const updatePlayerStats = (playerId, updates) => {
-  if (!playerId) {
-    console.log(`⚠️ Player ID undefined, skipping update`);
-    return null;
-  }
-
-  let playerStats = playersHistoryThisInnings.find(p => 
-    p.playerId && p.playerId.toString() === playerId.toString()
-  );
-
-  if (!playerStats) {
-    playerStats = {
-      playerId: playerId,
-      runs: 0, balls: 0, fours: 0, sixes: 0, strikeRate: 0,
-      wickets: 0, overs: 0, runsConceded: 0, maidens: 0, economy: 0,
-      wides: 0, noBalls: 0, dismissals: "", isOut: false
-    };
-    playersHistoryThisInnings.push(playerStats);
-    console.log(`🆕 New player added to history: ${playerId}`);
-  }
-
-  // ✅ STATS UPDATE - ONLY ONCE PER BALL
-  if (updates.runs !== undefined) {
-    playerStats.runs += updates.runs;
-    if (updates.runs === 4) playerStats.fours += 1;
-    if (updates.runs === 6) playerStats.sixes += 1;
-    console.log(`📈 Player ${playerId} runs: +${updates.runs} = ${playerStats.runs}`);
-  }
-  
-  if (updates.balls !== undefined && updates.balls > 0) {
-    playerStats.balls += updates.balls;
-    console.log(`📈 Player ${playerId} balls: +${updates.balls} = ${playerStats.balls}`);
-  }
-  
-  if (updates.runsConceded !== undefined) {
-    playerStats.runsConceded += updates.runsConceded;
-    console.log(`📈 Player ${playerId} runsConceded: +${updates.runsConceded} = ${playerStats.runsConceded}`);
-  }
-  
-  if (updates.wickets !== undefined) {
-    playerStats.wickets += updates.wickets;
-    console.log(`📈 Player ${playerId} wickets: +${updates.wickets} = ${playerStats.wickets}`);
-  }
-  
-  if (updates.overs !== undefined) {
-    playerStats.overs += updates.overs;
-    console.log(`📈 Player ${playerId} overs: +${updates.overs} = ${playerStats.overs}`);
-  }
-  
-  if (updates.wides !== undefined) {
-    playerStats.wides += updates.wides;
-  }
-  
-  if (updates.noBalls !== undefined) {
-    playerStats.noBalls += updates.noBalls;
-  }
-  
-  if (updates.dismissal) {
-    playerStats.dismissals = updates.dismissal;
-  }
-  
-  if (updates.isOut !== undefined) {
-    playerStats.isOut = updates.isOut;
-  }
-
-  // ✅ RATES CALCULATE KARO
-  if (playerStats.balls > 0) {
-    playerStats.strikeRate = parseFloat(((playerStats.runs / playerStats.balls) * 100).toFixed(2));
-  }
-  if (playerStats.overs > 0) {
-    playerStats.economy = parseFloat((playerStats.runsConceded / playerStats.overs).toFixed(2));
-  }
-
-  console.log(`✅ Player ${playerId} updated - R:${playerStats.runs}, B:${playerStats.balls}, O:${playerStats.overs}, RC:${playerStats.runsConceded}`);
-  return playerStats;
-};
-
-// ✅ FIXED: BALL UPDATE LOGIC - OVERHISTORY KE ACCORDING
-let ballRuns = Number(runs) || 0;
-let ballWicket = (Number(wickets) || 0) > 0;
-let isLegalDelivery = true;
-let commentaryLine = "";
-
-if (extraType === 'wide' || extraType === 'noball') {
-  isLegalDelivery = false;
-}
-
-// ✅ RUNS ADD KARO - OVERHISTORY KE ACCORDING
-if (runs !== undefined) {
-  let runsToAdd = ballRuns;
-  
-  if (extraType === 'noball') {
-    runsToAdd = ballRuns + 1;
-    console.log(`🎯 No Ball: ${ballRuns} boundary runs + 1 penalty = ${runsToAdd} total runs`);
-  }
-  else if (extraType === 'wide') {
-    runsToAdd = ballRuns + 1;
-    console.log(`🎯 Wide: ${ballRuns} extra runs + 1 penalty = ${runsToAdd} total runs`);
-  }
-
-  scoreData.runs += runsToAdd;
-  match.runs = scoreData.runs;
-
-  // ✅ FIX: ONLY ONE TIME PLAYER STATS UPDATE KARO
-  if (!extraType) {
-    // ✅ NORMAL BALL - STRIKER KO RUNS AUR BALLS
-    if (striker) {
-      updatePlayerStats(striker, { 
-        runs: ballRuns, 
-        balls: 1
-      });
-    }
-    // ✅ BOWLER KO RUNS CONCEDED AUR BALLS
-    if (bowler) {
-      updatePlayerStats(bowler, { 
-        runsConceded: ballRuns, 
-        balls: 1
-      });
-    }
-    
-    if (ballRuns === 0) commentaryLine = "Dot ball";
-    else if (ballRuns === 4) commentaryLine = "FOUR!";
-    else if (ballRuns === 6) commentaryLine = "SIX!";
-    else commentaryLine = `${ballRuns} run${ballRuns > 1 ? 's' : ''}`;
-  }
-  else {
-    switch (extraType) {
-      case 'wide':
-        if (bowler) {
-          updatePlayerStats(bowler, { 
-            runsConceded: runsToAdd,
-            wides: 1
-          });
+      const updatePlayerStats = (playerId, updates) => {
+        if (!playerId) {
+          console.log(`⚠️ Player ID undefined, skipping update`);
+          return null;
         }
-        commentaryLine = `WIDE! ${runsToAdd} run${runsToAdd > 1 ? 's' : ''}${ballRuns > 0 ? ` (${ballRuns} boundary)` : ''}`;
-        break;
+
+        let playerStats = playersHistoryThisInnings.find(p => 
+          p.playerId && p.playerId.toString() === playerId.toString()
+        );
+
+        if (!playerStats) {
+          playerStats = {
+            playerId: playerId,
+            runs: 0, balls: 0, fours: 0, sixes: 0, strikeRate: 0,
+            wickets: 0, overs: 0, runsConceded: 0, maidens: 0, economy: 0,
+            wides: 0, noBalls: 0, byes: 0, legByes: 0, dismissals: "", isOut: false
+          };
+          playersHistoryThisInnings.push(playerStats);
+          console.log(`🆕 New player added to history: ${playerId}`);
+        }
+
+        // ✅ STATS UPDATE - ONLY ONCE PER BALL
+        if (updates.runs !== undefined) {
+          playerStats.runs += updates.runs;
+          if (updates.runs === 4) playerStats.fours += 1;
+          if (updates.runs === 6) playerStats.sixes += 1;
+          console.log(`📈 Player ${playerId} runs: +${updates.runs} = ${playerStats.runs}`);
+        }
         
-      case 'noball':
-        if (bowler) {
-          updatePlayerStats(bowler, { 
-            runsConceded: runsToAdd,
-            noBalls: 1
-          });
+        if (updates.balls !== undefined && updates.balls > 0) {
+          playerStats.balls += updates.balls;
+          console.log(`📈 Player ${playerId} balls: +${updates.balls} = ${playerStats.balls}`);
         }
-        if (striker && ballRuns > 0) {
-          updatePlayerStats(striker, { 
-            runs: ballRuns
-          });
-        }
-        commentaryLine = `NO BALL! ${runsToAdd} run${runsToAdd > 1 ? 's' : ''}${ballRuns > 0 ? ` (${ballRuns} boundary)` : ''}`;
-        break;
         
-      case 'bye':
-        if (bowler && isLegalDelivery) {
-          updatePlayerStats(bowler, { 
-            balls: 1
-          });
+        if (updates.runsConceded !== undefined) {
+          playerStats.runsConceded += updates.runsConceded;
+          console.log(`📈 Player ${playerId} runsConceded: +${updates.runsConceded} = ${playerStats.runsConceded}`);
         }
-        commentaryLine = `${ballRuns} BYE${ballRuns > 1 ? 's' : ''}`;
-        break;
-      case 'legbye':
-        if (bowler && isLegalDelivery) {
-          updatePlayerStats(bowler, { 
-            balls: 1
-          });
+        
+        if (updates.wickets !== undefined) {
+          playerStats.wickets += updates.wickets;
+          console.log(`📈 Player ${playerId} wickets: +${updates.wickets} = ${playerStats.wickets}`);
         }
-        commentaryLine = `${ballRuns} LEG BYE${ballRuns > 1 ? 's' : ''}`;
-        break;
-    }
-  }
-}
+        
+        if (updates.overs !== undefined) {
+          playerStats.overs += updates.overs;
+          console.log(`📈 Player ${playerId} overs: +${updates.overs} = ${playerStats.overs}`);
+        }
+        
+        if (updates.wides !== undefined) {
+          playerStats.wides += updates.wides;
+        }
+        
+        if (updates.noBalls !== undefined) {
+          playerStats.noBalls += updates.noBalls;
+        }
+        
+        if (updates.byes !== undefined) {
+          playerStats.byes += updates.byes;
+        }
+        
+        if (updates.legByes !== undefined) {
+          playerStats.legByes += updates.legByes;
+        }
+        
+        if (updates.dismissal) {
+          playerStats.dismissals = updates.dismissal;
+        }
+        
+        if (updates.isOut !== undefined) {
+          playerStats.isOut = updates.isOut;
+        }
+
+        // ✅ RATES CALCULATE KARO
+        if (playerStats.balls > 0) {
+          playerStats.strikeRate = parseFloat(((playerStats.runs / playerStats.balls) * 100).toFixed(2));
+        }
+        if (playerStats.overs > 0) {
+          playerStats.economy = parseFloat((playerStats.runsConceded / playerStats.overs).toFixed(2));
+        }
+
+        console.log(`✅ Player ${playerId} updated - R:${playerStats.runs}, B:${playerStats.balls}, O:${playerStats.overs}, RC:${playerStats.runsConceded}`);
+        return playerStats;
+      };
+
+      // ✅ FIXED: BALL UPDATE LOGIC - OVERHISTORY KE ACCORDING
+      let ballRuns = Number(runs) || 0;
+      let ballWicket = (Number(wickets) || 0) > 0;
+      let isLegalDelivery = true;
+      let commentaryLine = "";
+
+      if (extraType === 'wide' || extraType === 'noball') {
+        isLegalDelivery = false;
+      }
+
+      // ✅ RUNS ADD KARO - OVERHISTORY KE ACCORDING
+      if (runs !== undefined) {
+        let runsToAdd = ballRuns;
+        
+        if (extraType === 'noball') {
+          runsToAdd = ballRuns + 1;
+          console.log(`🎯 No Ball: ${ballRuns} boundary runs + 1 penalty = ${runsToAdd} total runs`);
+        }
+        else if (extraType === 'wide') {
+          runsToAdd = ballRuns + 1;
+          console.log(`🎯 Wide: ${ballRuns} extra runs + 1 penalty = ${runsToAdd} total runs`);
+        }
+
+        scoreData.runs += runsToAdd;
+        match.runs = scoreData.runs;
+
+        // ✅ FIX: ONLY ONE TIME PLAYER STATS UPDATE KARO
+        if (!extraType) {
+          // ✅ NORMAL BALL - STRIKER KO RUNS AUR BALLS
+          if (striker) {
+            updatePlayerStats(striker, { 
+              runs: ballRuns, 
+              balls: 1
+            });
+          }
+          // ✅ BOWLER KO RUNS CONCEDED AUR BALLS
+          if (bowler) {
+            updatePlayerStats(bowler, { 
+              runsConceded: ballRuns, 
+              balls: 1
+            });
+          }
+          
+          if (ballRuns === 0) commentaryLine = "Dot ball";
+          else if (ballRuns === 4) commentaryLine = "FOUR!";
+          else if (ballRuns === 6) commentaryLine = "SIX!";
+          else commentaryLine = `${ballRuns} run${ballRuns > 1 ? 's' : ''}`;
+        }
+        else {
+          switch (extraType) {
+            case 'wide':
+              if (bowler) {
+                updatePlayerStats(bowler, { 
+                  runsConceded: runsToAdd,
+                  wides: 1
+                });
+              }
+              commentaryLine = `WIDE! ${runsToAdd} run${runsToAdd > 1 ? 's' : ''}${ballRuns > 0 ? ` (${ballRuns} boundary)` : ''}`;
+              break;
+              
+            case 'noball':
+              if (bowler) {
+                updatePlayerStats(bowler, { 
+                  runsConceded: runsToAdd,
+                  noBalls: 1
+                });
+              }
+              if (striker && ballRuns > 0) {
+                updatePlayerStats(striker, { 
+                  runs: ballRuns
+                });
+              }
+              commentaryLine = `NO BALL! ${runsToAdd} run${runsToAdd > 1 ? 's' : ''}${ballRuns > 0 ? ` (${ballRuns} boundary)` : ''}`;
+              break;
+              
+            case 'bye':
+              if (bowler && isLegalDelivery) {
+                updatePlayerStats(bowler, { 
+                  balls: 1,
+                  byes: ballRuns,
+                  runsConceded: ballRuns
+                });
+              }
+              // ✅ BYE RUNS BATSMAN KO NAHI MILENGE - SIRF TEAM EXTRAS MEIN JAYENGE
+              commentaryLine = `${ballRuns} BYE${ballRuns > 1 ? 's' : ''}`;
+              break;
+              
+            case 'legbye':
+              if (bowler && isLegalDelivery) {
+                updatePlayerStats(bowler, { 
+                  balls: 1,
+                  legByes: ballRuns,
+                  runsConceded: ballRuns
+                });
+              }
+              // ✅ LEGBYE RUNS BATSMAN KO NAHI MILENGE - SIRF TEAM EXTRAS MEIN JAYENGE
+              commentaryLine = `${ballRuns} LEG BYE${ballRuns > 1 ? 's' : ''}`;
+              break;
+          }
+        }
+      }
 
       // ✅ WICKET ADD KARO
-   if (ballWicket) {
-  scoreData.wickets += 1;
-  match.wickets = scoreData.wickets;
+      if (ballWicket) {
+        scoreData.wickets += 1;
+        match.wickets = scoreData.wickets;
 
-  console.log(`🎯 Wicket taken! Dismissal Type: ${dismissalType}, Striker: ${striker}`);
+        console.log(`🎯 Wicket taken! Dismissal Type: ${dismissalType}, Striker: ${striker}`);
 
-  if (striker) {
-    updatePlayerStats(striker, { 
-      dismissal: dismissalType, 
-      balls: isLegalDelivery ? 1 : 0,
-      isOut: true 
-    });
+        if (striker) {
+          updatePlayerStats(striker, { 
+            dismissal: dismissalType, 
+            balls: isLegalDelivery ? 1 : 0,
+            isOut: true 
+          });
 
-    switch(dismissalType) {
-      case 'bowled':
-        commentaryLine = `BOWLED! Clean bowled!`;
-        break;
-      case 'caught':
-        commentaryLine = `CAUGHT! Brilliant catch!`;
-        break;
-      case 'lbw':
-        commentaryLine = `LBW! Plumb in front!`;
-        break;
-      case 'runout':
-        commentaryLine = `RUN OUT! Direct hit!`;
-        break;
-      case 'stumped':
-        commentaryLine = `STUMPED! Quick work by the keeper!`;
-        break;
-      case 'hitwicket':
-        commentaryLine = `HIT WICKET! Unfortunate dismissal!`;
-        break;
-      default:
-        commentaryLine = `OUT! ${dismissalType}`;
-    }
-  }
+          // ✅ PLAYERSTATUSES UPDATE FOR WICKET
+          updatePlayerStatus(striker, "Out");
 
-         if (bowler && isLegalDelivery && 
-      ['bowled', 'caught', 'lbw', 'stumped', 'hitwicket'].includes(dismissalType)) {
-    updatePlayerStats(bowler, { wickets: 1 });
-    console.log(`🎯 Wicket credited to bowler: ${bowler}`);
-  }
+          switch(dismissalType) {
+            case 'bowled':
+              commentaryLine = `BOWLED! Clean bowled!`;
+              break;
+            case 'caught':
+              commentaryLine = `CAUGHT! Brilliant catch!`;
+              break;
+            case 'lbw':
+              commentaryLine = `LBW! Plumb in front!`;
+              break;
+            case 'runout':
+              commentaryLine = `RUN OUT! Direct hit!`;
+              break;
+            case 'stumped':
+              commentaryLine = `STUMPED! Quick work by the keeper!`;
+              break;
+            case 'hitwicket':
+              commentaryLine = `HIT WICKET! Unfortunate dismissal!`;
+              break;
+            default:
+              commentaryLine = `OUT! ${dismissalType}`;
+          }
+        }
 
-  if (newBatsman) {
-    match.currentStriker = newBatsman;
-    updatePlayerStats(newBatsman, { runs: 0, balls: 0, isOut: false });
-    commentaryLine += ` New batsman arrives.`;
-    console.log(`🔄 New batsman: ${newBatsman}`);
-  } else {
-    match.currentStriker = null;
-  }
+        if (bowler && isLegalDelivery && 
+          ['bowled', 'caught', 'lbw', 'stumped', 'hitwicket'].includes(dismissalType)) {
+          updatePlayerStats(bowler, { wickets: 1 });
+          console.log(`🎯 Wicket credited to bowler: ${bowler}`);
+        }
 
+        if (newBatsman) {
+          match.currentStriker = newBatsman;
+          updatePlayerStats(newBatsman, { runs: 0, balls: 0, isOut: false });
+          
+          // ✅ PLAYERSTATUSES UPDATE FOR NEW BATSMAN
+          updatePlayerStatus(newBatsman, "Batting (Striker)");
+          
+          commentaryLine += ` New batsman arrives.`;
+          console.log(`🔄 New batsman: ${newBatsman}`);
+        } else {
+          match.currentStriker = null;
+        }
 
         console.log(`🔄 Updating team schema for wicket...`);
         for (let teamId of [match.team1, match.team2]) {
@@ -3037,14 +3589,18 @@ if (runs !== undefined) {
           ...scoreData.currentOver,
           balls: [...scoreData.currentOver.balls],
           wides: scoreData.currentOver.balls.filter(b => b.extraType === 'wide').length,
-          noBalls: scoreData.currentOver.balls.filter(b => b.extraType === 'noball').length
+          noBalls: scoreData.currentOver.balls.filter(b => b.extraType === 'noball').length,
+          byes: scoreData.currentOver.balls.filter(b => b.extraType === 'bye').reduce((sum, ball) => sum + (ball.runs || 0), 0),
+          legByes: scoreData.currentOver.balls.filter(b => b.extraType === 'legbye').reduce((sum, ball) => sum + (ball.runs || 0), 0)
         });
       } else {
         scoreData.overHistory[overIndex] = {
           ...scoreData.currentOver,
           balls: [...scoreData.currentOver.balls],
           wides: scoreData.currentOver.balls.filter(b => b.extraType === 'wide').length,
-          noBalls: scoreData.currentOver.balls.filter(b => b.extraType === 'noball').length
+          noBalls: scoreData.currentOver.balls.filter(b => b.extraType === 'noball').length,
+          byes: scoreData.currentOver.balls.filter(b => b.extraType === 'bye').reduce((sum, ball) => sum + (ball.runs || 0), 0),
+          legByes: scoreData.currentOver.balls.filter(b => b.extraType === 'legbye').reduce((sum, ball) => sum + (ball.runs || 0), 0)
         };
       }
 
@@ -3060,24 +3616,23 @@ if (runs !== undefined) {
       }
 
       // ✅ OVER COMPLETE?
-    if (b >= 6) {
-  console.log(`🎯 Over completed! Bowler: ${bowler}, Over: ${ov}.${b}`);
-  
-  if (bowler) {
-    updatePlayerStats(bowler, { overs: 1 });
-    
-    const currentOverRuns = scoreData.currentOver.runs;
-    if (currentOverRuns === 0) {
-      updatePlayerStats(bowler, { maidens: 1 });
-      console.log(`🎯 Maiden over for bowler: ${bowler}`);
-    }
-    
-    const bowlerStats = playersHistoryThisInnings.find(p => 
-      p.playerId && p.playerId.toString() === bowler.toString()
-    );
-    console.log(`📊 Bowler ${bowler} overs updated to: ${bowlerStats?.overs || 0}`);
-  }
-
+      if (b >= 6) {
+        console.log(`🎯 Over completed! Bowler: ${bowler}, Over: ${ov}.${b}`);
+        
+        if (bowler) {
+          updatePlayerStats(bowler, { overs: 1 });
+          
+          const currentOverRuns = scoreData.currentOver.runs;
+          if (currentOverRuns === 0) {
+            updatePlayerStats(bowler, { maidens: 1 });
+            console.log(`🎯 Maiden over for bowler: ${bowler}`);
+          }
+          
+          const bowlerStats = playersHistoryThisInnings.find(p => 
+            p.playerId && p.playerId.toString() === bowler.toString()
+          );
+          console.log(`📊 Bowler ${bowler} overs updated to: ${bowlerStats?.overs || 0}`);
+        }
 
         ov += 1;
         b = 0;
@@ -3106,6 +3661,9 @@ if (runs !== undefined) {
       if (striker && !ballWicket) {
         match.currentStriker = striker;
         
+        // ✅ PLAYERSTATUSES UPDATE
+        updatePlayerStatus(striker, "Batting (Striker)");
+        
         for (let teamId of [match.team1, match.team2]) {
           const team = await Team.findById(teamId);
           if (!team) continue;
@@ -3125,6 +3683,9 @@ if (runs !== undefined) {
       
       if (nonStriker) {
         match.nonStriker = nonStriker;
+        
+        // ✅ PLAYERSTATUSES UPDATE
+        updatePlayerStatus(nonStriker, "Batting (Non-Striker)");
         
         // ✅ FIX: NON-STRIKER KO BHI PLAYERS HISTORY MEIN ADD KARO
         updatePlayerStats(nonStriker, { runs: 0, balls: 0 });
@@ -3148,6 +3709,9 @@ if (runs !== undefined) {
       
       if (bowler && !changeBowler) {
         match.currentBowler = bowler;
+        
+        // ✅ PLAYERSTATUSES UPDATE
+        updatePlayerStatus(bowler, "Bowling");
         
         for (let teamId of [match.team1, match.team2]) {
           const team = await Team.findById(teamId);
@@ -3183,6 +3747,7 @@ if (runs !== undefined) {
       match.markModified('nonStriker');
       match.markModified('currentBowler');
       match.markModified('commentary');
+      match.markModified('playerStatuses');
 
       console.log(`💾 Saving match data...`);
       console.log(`📊 Final Score: ${scoreData.runs}/${scoreData.wickets} in ${scoreData.overs} overs`);
@@ -3212,11 +3777,23 @@ if (runs !== undefined) {
       // ✅ FORMATTED OVER HISTORY SEND KARO
       const formattedOverHistory = getFormattedOverHistory(scoreData.overHistory);
 
+      // ✅ PLAYER DETAILS ADD KARO RESPONSE MEIN
+      const playerDetails = await getPlayerDetails(
+        match.currentStriker, 
+        match.nonStriker, 
+        match.currentBowler
+      );
+      const updatedPlayerDetails = updatePlayerDetailsWithStats(
+        playerDetails, 
+        playersHistoryThisInnings
+      );
+
       const responseData = {
         success: true,
         message: "Ball updated successfully",
         match: savedMatch,
-        overHistory: formattedOverHistory
+        overHistory: formattedOverHistory,
+        playerDetails: updatedPlayerDetails
       };
 
       if (isSecondInnings) {
@@ -3225,6 +3802,21 @@ if (runs !== undefined) {
         responseData.remainingWickets = 10 - scoreData.wickets;
         console.log(`🎯 Second innings update - Target: ${match.target}, Required: ${responseData.requiredRuns}`);
       }
+
+      // ✅ SOCKET EMIT FOR BALL UPDATE
+      emitLiveUpdate("BALL_UPDATED", "New ball added", {
+        score: `${savedMatch.runs || 0}/${savedMatch.wickets || 0}`,
+        overs: savedMatch.overs || 0,
+        runRate: savedMatch.runRate || 0,
+        ballDetails: {
+          runs: ballRuns,
+          wicket: ballWicket,
+          extraType: extraType,
+          commentary: commentaryLine
+        },
+        requiredRuns: responseData.requiredRuns,
+        remainingWickets: responseData.remainingWickets
+      });
 
       return res.status(200).json(responseData);
     }
@@ -3236,6 +3828,9 @@ if (runs !== undefined) {
       console.log(`🔄 Updating striker from ${match.currentStriker} to ${striker}`);
       match.currentStriker = striker;
       playersUpdated = true;
+      
+      // ✅ PLAYERSTATUSES UPDATE
+      updatePlayerStatus(striker, "Batting (Striker)");
       
       // Team schema update for striker
       for (let teamId of [match.team1, match.team2]) {
@@ -3264,6 +3859,9 @@ if (runs !== undefined) {
       match.nonStriker = nonStriker;
       playersUpdated = true;
       
+      // ✅ PLAYERSTATUSES UPDATE
+      updatePlayerStatus(nonStriker, "Batting (Non-Striker)");
+      
       // Team schema update for non-striker
       for (let teamId of [match.team1, match.team2]) {
         const team = await Team.findById(teamId);
@@ -3287,6 +3885,9 @@ if (runs !== undefined) {
       console.log(`🔄 Updating bowler from ${match.currentBowler} to ${bowler}`);
       match.currentBowler = bowler;
       playersUpdated = true;
+      
+      // ✅ PLAYERSTATUSES UPDATE
+      updatePlayerStatus(bowler, "Bowling");
       
       // Team schema update for bowler
       for (let teamId of [match.team1, match.team2]) {
@@ -3318,12 +3919,31 @@ if (runs !== undefined) {
       const scoreData = match.scores[currentInningsIndex];
       const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
       
+      // ✅ PLAYER DETAILS ADD KARO RESPONSE MEIN
+      const playerDetails = await getPlayerDetails(
+        match.currentStriker, 
+        match.nonStriker, 
+        match.currentBowler
+      );
+      const updatedPlayerDetails = updatePlayerDetailsWithStats(
+        playerDetails, 
+        match.playersHistory.find(inn => inn.innings === innings)?.players || []
+      );
+
+      // ✅ SOCKET EMIT
+      emitLiveUpdate("PLAYERS_UPDATED", "Players updated successfully", {
+        currentStriker: match.currentStriker,
+        currentNonStriker: match.nonStriker,
+        currentBowler: match.currentBowler
+      });
+      
       return res.status(200).json({
         success: true,
         message: "Players updated successfully",
         match: match,
         target: match.target,
-        overHistory: formattedOverHistory
+        overHistory: formattedOverHistory,
+        playerDetails: updatedPlayerDetails
       });
     }
 
@@ -3332,6 +3952,9 @@ if (runs !== undefined) {
       console.log(`🔄 Changing striker from ${match.currentStriker} to ${newBatsman}`);
       
       match.currentStriker = newBatsman;
+      
+      // ✅ PLAYERSTATUSES UPDATE
+      updatePlayerStatus(newBatsman, "Batting (Striker)");
       
       // Team schema mein player status update karo
       for (let teamId of [match.team1, match.team2]) {
@@ -3342,6 +3965,7 @@ if (runs !== undefined) {
           const playerId = player._id.toString();
 
           if (player.status === "Batting (Striker)") {
+            updatePlayerStatus(player._id, "Fielding");
             return { ...player.toObject(), status: "Fielding" };
           }
           else if (playerId === newBatsman.toString()) {
@@ -3360,11 +3984,28 @@ if (runs !== undefined) {
       const scoreData = match.scores[currentInningsIndex];
       const formattedOverHistory = scoreData ? getFormattedOverHistory(scoreData.overHistory) : [];
       
+      // ✅ PLAYER DETAILS ADD KARO RESPONSE MEIN
+      const playerDetails = await getPlayerDetails(
+        match.currentStriker, 
+        match.nonStriker, 
+        match.currentBowler
+      );
+      const updatedPlayerDetails = updatePlayerDetailsWithStats(
+        playerDetails, 
+        match.playersHistory.find(inn => inn.innings === innings)?.players || []
+      );
+
+      // ✅ SOCKET EMIT
+      emitLiveUpdate("STRIKER_CHANGED", "Striker changed", {
+        currentStriker: match.currentStriker
+      });
+      
       return res.status(200).json({
         success: true,
         message: "Striker changed successfully",
         match: match,
-        overHistory: formattedOverHistory
+        overHistory: formattedOverHistory,
+        playerDetails: updatedPlayerDetails
       });
     }
 
@@ -3376,6 +4017,19 @@ if (runs !== undefined) {
 
   } catch (error) {
     console.error("Update Live Score Error:", error);
+    
+    // ✅ SOCKET EMIT FOR ERROR
+    const io = req.app.get("io");
+    if (io) {
+      io.emit("live-match-update", {
+        type: "ERROR",
+        matchId: id,
+        message: "Error updating live score",
+        error: error.message,
+        timestamp: new Date().toISOString()
+      });
+    }
+
     return res.status(500).json({
       success: false,
       message: "Error updating live score",
@@ -3544,46 +4198,45 @@ export const getTeamsByCategory = async (req, res) => {
 export const createMatchForGame = async (req, res) => {
   try {
     const { userId } = req.params;
-    const { name, categoryId, scoringMethod, gameMode, players, teams, tournamentId, type } = req.body;
+    const {
+      name,
+      categoryId,
+      scoringMethod,
+      gameMode,
+      players,
+      teams,
+      tournamentId,
+      type,
 
-    // Validate creator (userId)
+      // 👇 NEW FIELDS
+      extraTimeAllowedForHalfTime,
+      extraTimeDurationForHalfTime,
+      extraTimeAllowedForFullTime,
+      extraTimeDurationForFullTime
+    } = req.body;
+
+    // Existing validation logic...
     const creator = await User.findById(userId);
-    if (!creator) {
-      return res.status(404).json({ success: false, message: 'Creator not found' });
-    }
+    if (!creator) return res.status(404).json({ success: false, message: 'Creator not found' });
 
-    // Validate category
     const category = await GameCategory.findById(categoryId);
-    if (!category) {
-      return res.status(404).json({ success: false, message: 'Category not found' });
-    }
+    if (!category) return res.status(404).json({ success: false, message: 'Category not found' });
 
-    // Basic validation for scoringMethod and gameMode
     if (!scoringMethod || !gameMode) {
-      return res.status(400).json({
-        success: false,
-        message: 'Scoring method and game mode are required',
-      });
+      return res.status(400).json({ success: false, message: 'Scoring method and game mode are required' });
     }
 
-    // Tournament-specific logic
     if (tournamentId) {
       const tournament = await Tournament.findById(tournamentId);
-      if (!tournament) {
-        return res.status(404).json({ success: false, message: 'Tournament not found' });
-      }
+      if (!tournament) return res.status(404).json({ success: false, message: 'Tournament not found' });
     }
 
     let playerEntries = [];
     if (gameMode === 'single') {
       if (!players || !Array.isArray(players) || players.length === 0) {
-        return res.status(400).json({
-          success: false,
-          message: 'Players array is required for single game mode',
-        });
+        return res.status(400).json({ success: false, message: 'Players array is required for single game mode' });
       }
 
-      // Prepare player entries for single mode
       for (const playerName of players) {
         let existingUser = await User.findOne({ name: playerName });
         if (!existingUser) {
@@ -3596,13 +4249,9 @@ export const createMatchForGame = async (req, res) => {
     let teamEntries = [];
     if (gameMode === 'team') {
       if (!teams || !Array.isArray(teams) || teams.length < 2) {
-        return res.status(400).json({
-          success: false,
-          message: 'At least two teams are required for team game mode',
-        });
+        return res.status(400).json({ success: false, message: 'At least two teams are required for team game mode' });
       }
 
-      // Prepare teams for team game mode
       for (const team of teams) {
         const existingTeam = await GameTeam.findById(team.teamId);
         if (!existingTeam) {
@@ -3612,18 +4261,24 @@ export const createMatchForGame = async (req, res) => {
       }
     }
 
-    // Create new match with or without tournament reference
+    // ✅ Create the match with the new fields
     const newMatch = new GameMatch({
       name,
       categoryId,
       scoringMethod,
       gameMode,
-      players: playerEntries, 
+      players: playerEntries,
       teams: teamEntries,
-      tournamentId: tournamentId,  // Add tournamentId if provided
+      tournamentId: tournamentId || null,
       createdBy: creator._id,
       status: 'upcoming',
       createdAt: new Date(),
+
+      // 👇 New fields being saved
+      extraTimeAllowedForHalfTime: extraTimeAllowedForHalfTime || false,
+      extraTimeDurationForHalfTime: extraTimeDurationForHalfTime || 0,
+      extraTimeAllowedForFullTime: extraTimeAllowedForFullTime || false,
+      extraTimeDurationForFullTime: extraTimeDurationForFullTime || 0,
     });
 
     await newMatch.save();
@@ -3639,9 +4294,15 @@ export const createMatchForGame = async (req, res) => {
         gameMode: newMatch.gameMode,
         players: newMatch.players,
         teams: newMatch.teams,
-        tournamentId: newMatch.tournamentId,  // Include tournamentId in the response
+        tournamentId: newMatch.tournamentId,
         status: newMatch.status,
         createdBy: newMatch.createdBy,
+
+        // 👇 Return new fields
+        extraTimeAllowedForHalfTime: newMatch.extraTimeAllowedForHalfTime,
+        extraTimeDurationForHalfTime: newMatch.extraTimeDurationForHalfTime,
+        extraTimeAllowedForFullTime: newMatch.extraTimeAllowedForFullTime,
+        extraTimeDurationForFullTime: newMatch.extraTimeDurationForFullTime,
       },
     });
   } catch (error) {
@@ -3660,59 +4321,46 @@ export const startGameMatch = async (req, res) => {
       startKickTime,
       totalDuration,
       halfTimeDuration,
-      extraTimeAllowed,
-      extraTimeDuration
+
+      // ✅ NEW FIELDS
+      extraTimeAllowedForHalfTime,
+      extraTimeDurationForHalfTime,
+      extraTimeAllowedForFullTime,
+      extraTimeDurationForFullTime
     } = req.body;
 
-    if (!userId || !matchId) {
-      return res.status(400).json({
-        success: false,
-        message: "User ID and Match ID are required ❌"
-      });
+    // ✅ Validate matchId
+    if (!mongoose.Types.ObjectId.isValid(matchId)) {
+      return res.status(400).json({ success: false, message: "Invalid match ID ❌" });
     }
 
-    const user = await User.findById(userId);
-    if (!user) {
-      return res.status(404).json({ success: false, message: "User not found ❌" });
-    }
-
-    const match = await GameMatch.findById(matchId).populate({
-      path: 'teams.teamId',
-      populate: { path: 'players', model: 'User' }
-    });
-
+    // ✅ Fetch the match
+    const match = await GameMatch.findById(matchId).populate('teams.teamId');
     if (!match) {
       return res.status(404).json({ success: false, message: "Match not found ❌" });
     }
 
-    if (String(match.createdBy) !== String(userId)) {
-      return res.status(403).json({
-        success: false,
-        message: "You are not authorized to start this match ❌",
-      });
-    }
+    // ✅ Set match state
+    match.status = 'live';
+    match.currentStatus = 'half-time';
+    match.startedAt = new Date();
+    match.startKickTime = startKickTime || new Date();
+    match.totalDuration = totalDuration || 90;
+    match.halfTimeDuration = halfTimeDuration || 15;
 
-    if (match.status !== 'upcoming') {
-      return res.status(400).json({
-        success: false,
-        message: `Match cannot be started. Current status is '${match.status}' ❌`,
-      });
-    }
+    // ✅ Assign extra time values (with default fallback)
+    match.extraTimeAllowedForHalfTime = extraTimeAllowedForHalfTime ?? false;
+    match.extraTimeDurationForHalfTime = extraTimeDurationForHalfTime ?? 0;
+    match.extraTimeAllowedForFullTime = extraTimeAllowedForFullTime ?? false;
+    match.extraTimeDurationForFullTime = extraTimeDurationForFullTime ?? 0;
 
-    if (!match.teams?.length) {
-      return res.status(400).json({
-        success: false,
-        message: "No teams found in this match ❌"
-      });
-    }
-
-    const scoreCard = match.teams.map(t => {
-      const team = t.teamId;
+    // ✅ Initialize scoreCard
+    match.scoreCard = match.teams.map(({ teamId }) => {
       return {
-        teamId: team._id,
-        teamName: team.name,
+        teamId: teamId._id,
+        teamName: teamId.name,
         teamGoals: 0,
-        players: team.players.map(player => ({
+        players: teamId.players.map(player => ({
           playerId: player._id,
           playerName: player.name,
           goals: 0
@@ -3720,42 +4368,36 @@ export const startGameMatch = async (req, res) => {
       };
     });
 
-    const now = new Date();
-    match.status = 'live';
-    match.startedAt = now;
-    match.startKickTime = startKickTime || now;
-    match.totalDuration = totalDuration || 90;
-    match.halfTimeDuration = halfTimeDuration || 15;
-    match.extraTimeAllowed = extraTimeAllowed ?? false;
-    match.extraTimeDuration = extraTimeDuration || 30;
-    match.scoreCard = scoreCard;
-
     await match.save();
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
       message: "Match started successfully ✅",
       match: {
         _id: match._id,
         name: match.name,
         status: match.status,
+        currentStatus: match.currentStatus,
         startedAt: match.startedAt,
         startKickTime: match.startKickTime,
         totalDuration: match.totalDuration,
         halfTimeDuration: match.halfTimeDuration,
-        extraTimeAllowed: match.extraTimeAllowed,
-        extraTimeDuration: match.extraTimeDuration,
+
+        // ✅ Return new fields as well
+        extraTimeAllowedForHalfTime: match.extraTimeAllowedForHalfTime,
+        extraTimeDurationForHalfTime: match.extraTimeDurationForHalfTime,
+        extraTimeAllowedForFullTime: match.extraTimeAllowedForFullTime,
+        extraTimeDurationForFullTime: match.extraTimeDurationForFullTime,
+
         scoreCard: match.scoreCard
       },
     });
 
   } catch (error) {
     console.error('Error starting match:', error);
-    res.status(500).json({ success: false, message: "Internal server error ❌" });
+    return res.status(500).json({ success: false, message: "Internal server error ❌" });
   }
 };
-
-
 
 
 export const updateFootballMatchStatus = async (req, res) => {
@@ -3893,32 +4535,94 @@ export const getSingleGameMatch = async (req, res) => {
   try {
     const { matchId } = req.params;
 
+    // Check if matchId is provided
     if (!matchId) {
       return res.status(400).json({ success: false, message: 'Match ID is required' });
     }
 
-    const match = await GameMatch.findById(matchId)
-      .populate('createdBy', 'name')
-      .populate('categoryId', 'name')
-      .lean();
-
-    if (!match) {
-      return res.status(404).json({ success: false, message: 'Match not found' });
+    // Check if matchId is a valid ObjectId
+    if (!mongoose.isValidObjectId(matchId)) {
+      return res.status(400).json({ success: false, message: 'Invalid match ID format' });
     }
 
-    // Emit to the specific match room
-    io.to(matchId).emit('singleMatchData', { match });
+    // Fetch the match with populates
+    const match = await GameMatch.findById(matchId)
+      .populate({
+        path: "createdBy",
+        select: "name email", // Only select name and email of creator
+      })
+      .populate({
+        path: "categoryId",
+        select: "name", // Only select category name
+      })
+      .populate({
+        path: "teams.teamId",
+        model: "GameTeam",
+        populate: {
+          path: "players",
+          model: "User",
+          select: "name email avatar", // Only select the player's name, email, and avatar
+        },
+      });
+
+    if (!match) {
+      return res.status(404).json({ success: false, message: 'Match not found ❌' });
+    }
+
+    // Building the response object
+    const response = {
+      _id: match._id,
+      name: match.name,
+      categoryId: match.categoryId,
+      createdBy: match.createdBy,
+      status: match.status,
+      currentStatus: match.currentStatus,
+      startKickTime: match.startKickTime,
+      startedAt: match.startedAt,
+      totalDuration: match.totalDuration,
+      halfTimeDuration: match.halfTimeDuration,
+      extraTimeAllowedForHalfTime: match.extraTimeAllowedForHalfTime,
+      extraTimeDurationForHalfTime: match.extraTimeDurationForHalfTime,
+      extraTimeAllowedForFullTime: match.extraTimeAllowedForFullTime,
+      extraTimeDurationForFullTime: match.extraTimeDurationForFullTime,
+      halfTimeScore: match.halfTimeScore,
+      secondHalfScore: match.secondHalfScore,
+      extraTimeScore: match.extraTimeScore,
+      finalScore: match.finalScore,
+      penaltyScore: match.penaltyScore || 'N/A', // Default to 'N/A' if not available
+      teamScores: match.teamScores || [], // Default to empty array if not available
+      winner: match.winner,
+      cancelReason: match.cancelReason,
+      createdAt: match.createdAt,
+      updatedAt: match.updatedAt,
+      scoreCard: match.scoreCard || [], // Default to empty array if not available
+      teams: match.teams.map(team => ({
+        teamId: team.teamId?._id,
+        teamName: team.teamId?.teamName || 'Unknown Team', // Handle missing team name gracefully
+        players: team.teamId?.players.map(p => ({
+          playerId: p._id,
+          playerName: p.name || 'Unknown Player', // Handle missing player name gracefully
+          email: p.email,
+          avatar: p.avatar || 'default-avatar.jpg', // Provide default avatar if not available
+        })) || [], // If no players, provide an empty array
+      })),
+    };
 
     return res.status(200).json({
       success: true,
-      match,
+      message: "Match fetched successfully ✅",
+      match: response,
     });
 
   } catch (error) {
     console.error('Error fetching match:', error);
-    return res.status(500).json({ success: false, message: 'Internal server error' });
+    return res.status(500).json({ success: false, message: 'Internal server error ❌' });
   }
 };
+
+
+
+
 
 
 export const getAllGameMatches = async (req, res) => {
@@ -4070,12 +4774,17 @@ export const getSingleGameMatches = async (req, res) => {
       _id: match._id,
       name: match.name,
       status: match.status,
+      currentStatus: match.currentStatus,                    // added
       startedAt: match.startedAt,
       startKickTime: match.startKickTime,
       totalDuration: match.totalDuration,
       halfTimeDuration: match.halfTimeDuration,
       extraTimeAllowed: match.extraTimeAllowed,
       extraTimeDuration: match.extraTimeDuration,
+      extraTimeAllowedForHalfTime: match.extraTimeAllowedForHalfTime,   // added
+      extraTimeDurationForHalfTime: match.extraTimeDurationForHalfTime, // added
+      extraTimeAllowedForFullTime: match.extraTimeAllowedForFullTime,   // added
+      extraTimeDurationForFullTime: match.extraTimeDurationForFullTime, // added
       scoreCard: match.status !== 'upcoming' ? match.scoreCard : [],
       liveGoalScores,
       winner: match.winner
@@ -4121,12 +4830,52 @@ export const getSingleGameMatches = async (req, res) => {
 export const updateMatchScore = async (req, res) => {
   try {
     const { matchId } = req.params;
-    const { teamId, playerId, goals, status, halfTimeScore, extraTimeScore, finalScore, timeElapsed } = req.body;
+    const {
+      teamId,
+      playerId,
+      goals,
+      action,
 
-    if (!matchId || !teamId || !playerId || typeof goals !== 'number') {
+      extraTimeAllowedForHalfTime,
+      extraTimeDurationForHalfTime,
+      extraTimeAllowedForFullTime,
+      extraTimeDurationForFullTime,
+
+      status,
+      cancelReason,
+      halfTimeScore,
+      extraTimeScore,
+      finalScore,
+      timeElapsed,
+      currentStatus,
+
+      warningCards,
+    } = req.body;
+
+    if (!matchId) {
       return res.status(400).json({
         success: false,
-        message: "matchId, teamId, playerId and goals (number) are required ❌"
+        message: "matchId is required in params ❌",
+      });
+    }
+
+    const isGoalUpdate = teamId && playerId && typeof goals === 'number';
+    const isExtraTimeUpdate =
+      typeof extraTimeAllowedForHalfTime === 'boolean' ||
+      typeof extraTimeDurationForHalfTime === 'number' ||
+      typeof extraTimeAllowedForFullTime === 'boolean' ||
+      typeof extraTimeDurationForFullTime === 'number';
+    const isWarningCardUpdate =
+      teamId && playerId && warningCards && typeof warningCards === 'object';
+
+    const isOptionalUpdate =
+      status || currentStatus || halfTimeScore || extraTimeScore || finalScore || timeElapsed !== undefined || cancelReason;
+
+    if (!isGoalUpdate && !isExtraTimeUpdate && !isWarningCardUpdate && !isOptionalUpdate) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Invalid payload. Provide goal update, extra time update, warning card data, or a valid match status update ❌",
       });
     }
 
@@ -4135,60 +4884,150 @@ export const updateMatchScore = async (req, res) => {
       return res.status(404).json({ success: false, message: "Match not found ❌" });
     }
 
-    if (!match.scoreCard || !Array.isArray(match.scoreCard)) {
-      return res.status(400).json({ success: false, message: "ScoreCard is not initialized ❌" });
+    const oldCurrentStatus = match.currentStatus;
+
+    if (currentStatus) {
+      match.currentStatus = currentStatus;
     }
 
-    // Find team in scoreCard
-    const teamScore = match.scoreCard.find(team => String(team.teamId) === String(teamId));
-    if (!teamScore) {
-      return res.status(404).json({ success: false, message: "Team not found in scorecard ❌" });
+    if (oldCurrentStatus === 'half-time' && currentStatus === 'second-half') {
+      match.secondHalfScore = { teamA: 0, teamB: 0 };
     }
 
-    // Update team goals
-    teamScore.teamGoals += goals;
+    // Goal Update
+    if (isGoalUpdate) {
+      if (!match.scoreCard || !Array.isArray(match.scoreCard)) {
+        return res.status(400).json({
+          success: false,
+          message: "ScoreCard is not initialized ❌",
+        });
+      }
 
-    // Find player
-    const playerScore = teamScore.players.find(p => String(p.playerId) === String(playerId));
-    if (!playerScore) {
-      return res.status(404).json({ success: false, message: "Player not found in team ❌" });
+      const teamScore = match.scoreCard.find(
+        (team) => String(team.teamId) === String(teamId)
+      );
+      if (!teamScore) {
+        return res.status(404).json({
+          success: false,
+          message: "Team not found in scorecard ❌",
+        });
+      }
+
+      const playerScore = teamScore.players.find(
+        (p) => String(p.playerId) === String(playerId)
+      );
+      if (!playerScore) {
+        return res.status(404).json({
+          success: false,
+          message: "Player not found in team ❌",
+        });
+      }
+
+      if (action === "dec") {
+        teamScore.teamGoals = Math.max(0, teamScore.teamGoals - goals);
+        playerScore.goals = Math.max(0, playerScore.goals - goals);
+      } else {
+        teamScore.teamGoals += goals;
+        playerScore.goals += goals;
+      }
+
+      if (match.currentStatus === 'half-time') {
+        match.halfTimeScore = {
+          teamA: match.scoreCard[0].teamGoals,
+          teamB: match.scoreCard[1].teamGoals,
+        };
+      }
+
+      if (match.currentStatus === 'second-half') {
+        if (!match.secondHalfScore) {
+          match.secondHalfScore = { teamA: 0, teamB: 0 };
+        }
+        const teamIndex = match.scoreCard.findIndex(team => String(team.teamId) === String(teamId));
+        const increment = action === "dec" ? -goals : goals;
+
+        if (teamIndex === 0) {
+          match.secondHalfScore.teamA = Math.max(0, (match.secondHalfScore.teamA || 0) + increment);
+        } else if (teamIndex === 1) {
+          match.secondHalfScore.teamB = Math.max(0, (match.secondHalfScore.teamB || 0) + increment);
+        }
+      }
+
+      match.finalScore = {
+        teamA: (match.halfTimeScore?.teamA || 0) + (match.secondHalfScore?.teamA || 0),
+        teamB: (match.halfTimeScore?.teamB || 0) + (match.secondHalfScore?.teamB || 0),
+      };
     }
 
-    // Update player goals
-    playerScore.goals += goals;
+    // Warning Card Update
+    if (isWarningCardUpdate) {
+      const teamScore = match.scoreCard.find(
+        (team) => String(team.teamId) === String(teamId)
+      );
+      const playerScore = teamScore?.players.find(
+        (p) => String(p.playerId) === String(playerId)
+      );
 
-    // Optional: Update match status and time-related scores if provided
-    if (status) {
-      match.status = status;
-    }
-    if (halfTimeScore) {
-      match.halfTimeScore = halfTimeScore;
-    }
-    if (extraTimeScore) {
-      match.extraTimeScore = extraTimeScore;
-    }
-    if (finalScore) {
-      match.finalScore = finalScore;
-    }
-    if (timeElapsed !== undefined) {
-      match.timeElapsed = timeElapsed;
+      if (!teamScore || !playerScore) {
+        return res.status(404).json({
+          success: false,
+          message: "Team or player not found in scorecard ❌",
+        });
+      }
+
+      if (!playerScore.warningCards) {
+        playerScore.warningCards = { yellow: 0, red: 0 };
+      }
+
+      playerScore.warningCards.yellow += warningCards.yellow || 0;
+      playerScore.warningCards.red += warningCards.red || 0;
+
+      if (
+        playerScore.warningCards.red >= 1 ||
+        playerScore.warningCards.yellow >= 2
+      ) {
+        playerScore.isOut = true;
+      }
     }
 
-    // Save match
+    // Extra Time Handling
+    if (typeof extraTimeAllowedForHalfTime === "boolean") {
+      match.extraTimeAllowedForHalfTime = extraTimeAllowedForHalfTime;
+    }
+    if (typeof extraTimeDurationForHalfTime === "number") {
+      match.extraTimeDurationForHalfTime = extraTimeDurationForHalfTime;
+    }
+    if (typeof extraTimeAllowedForFullTime === "boolean") {
+      match.extraTimeAllowedForFullTime = extraTimeAllowedForFullTime;
+    }
+    if (typeof extraTimeDurationForFullTime === "number") {
+      match.extraTimeDurationForFullTime = extraTimeDurationForFullTime;
+    }
+
+    // Optional Fields
+    if (status) match.status = status;
+    if (cancelReason) match.cancelReason = cancelReason;
+    if (halfTimeScore) match.halfTimeScore = halfTimeScore;
+    if (extraTimeScore) match.extraTimeScore = extraTimeScore;
+    if (finalScore) match.finalScore = finalScore;
+    if (timeElapsed !== undefined) match.timeElapsed = timeElapsed;
+
+    // ✅ SAVE TO DB before emitting and response
     await match.save();
 
-    // Prepare liveGoalScores
-    const liveGoalScores = match.scoreCard.map(team => ({
-      teamId: team.teamId,
-      teamName: team.teamName,
-      teamGoals: team.teamGoals
-    }));
+    // Prepare response
+    const liveGoalScores = match.scoreCard
+      ? match.scoreCard.map((team) => ({
+          teamId: team.teamId,
+          teamName: team.teamName,
+          teamGoals: team.teamGoals,
+        }))
+      : [];
 
-    // Compose updated match data for emit
     const updatedMatchData = {
       _id: match._id,
       name: match.name,
       status: match.status,
+      currentStatus: match.currentStatus || null,
       startedAt: match.startedAt,
       startKickTime: match.startKickTime,
       totalDuration: match.totalDuration,
@@ -4202,19 +5041,1241 @@ export const updateMatchScore = async (req, res) => {
       extraTimeScore: match.extraTimeScore || null,
       finalScore: match.finalScore || null,
       timeElapsed: match.timeElapsed || null,
+      extraTimeAllowedForHalfTime: match.extraTimeAllowedForHalfTime,
+      extraTimeDurationForHalfTime: match.extraTimeDurationForHalfTime,
+      extraTimeAllowedForFullTime: match.extraTimeAllowedForFullTime,
+      extraTimeDurationForFullTime: match.extraTimeDurationForFullTime,
+      secondHalfScore: match.secondHalfScore || null,
+      cancelReason: match.cancelReason || null,
     };
 
-    // Emit updated match data
     io.emit("match:update", updatedMatchData);
 
     return res.status(200).json({
       success: true,
-      message: "Score updated successfully ✅",
-      match: updatedMatchData
+      message: "Match updated successfully ✅",
+      match: updatedMatchData,
+    });
+  } catch (error) {
+    console.error("Error updating match:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error ❌",
+    });
+  }
+};
+
+
+
+export const getCompletedMatchById = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({ success: false, message: "Match ID is required" });
+    }
+
+    const match = await Match.findById(id)
+      .populate("categoryId", "name")
+      .populate("tournamentId", "name")
+      .populate("team1", "teamName players")
+      .populate("team2", "teamName players")
+      .populate("currentStriker", "name")
+      .populate("nonStriker", "name")
+      .populate("currentBowler", "name")
+      .populate("opening.striker", "name")
+      .populate("opening.nonStriker", "name")
+      .populate("bowling.bowler", "name");
+
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found" });
+    }
+
+    // ✅ PLAYER NAME MAPPING
+    const playerNameMap = new Map();
+
+    // Team1 players
+    if (match.team1 && match.team1.players) {
+      match.team1.players.forEach(player => {
+        if (player._id) {
+          playerNameMap.set(player._id.toString(), player.name);
+        }
+      });
+    }
+
+    // Team2 players
+    if (match.team2 && match.team2.players) {
+      match.team2.players.forEach(player => {
+        if (player._id) {
+          playerNameMap.set(player._id.toString(), player.name);
+        }
+      });
+    }
+
+    // Additional players
+    const additionalPlayers = [
+      match.currentStriker,
+      match.nonStriker,
+      match.currentBowler,
+      match.opening?.striker,
+      match.opening?.nonStriker,
+      match.bowling?.bowler
+    ];
+
+    additionalPlayers.forEach(player => {
+      if (player && player._id) {
+        playerNameMap.set(player._id.toString(), player.name);
+      }
+    });
+
+    // ✅ SIMPLIFIED: Calculate batting stats ONLY from overHistory
+    const calculateBattingStats = (playerId, inningsNumber) => {
+      if (!playerId) return null;
+
+      const playerIdStr = playerId.toString();
+      
+      // ✅ USE ONLY OVERHISTORY (completed overs)
+      let runs = 0;
+      let balls = 0;
+      let fours = 0;
+      let sixes = 0;
+      let isOut = false;
+      let dismissal = '';
+
+      if (match.scores && match.scores.length > 0) {
+        match.scores.forEach(score => {
+          const scoreInnings = score.innings || 1;
+          if (scoreInnings !== inningsNumber) return;
+          
+          if (score.overHistory) {
+            score.overHistory.forEach(over => {
+              if (over.balls) {
+                over.balls.forEach(ball => {
+                  const ballStrikerId = ball.striker?.toString();
+                  if (ballStrikerId === playerIdStr) {
+                    const ballRuns = ball.runs || 0;
+                    runs += ballRuns;
+                    
+                    if (!ball.extraType || (ball.extraType !== 'wide' && ball.extraType !== 'noball')) {
+                      balls += 1;
+                    }
+                    
+                    if (ballRuns === 4) fours += 1;
+                    if (ballRuns === 6) sixes += 1;
+                    
+                    if (ball.wicket && ball.striker?.toString() === playerIdStr) {
+                      isOut = true;
+                      dismissal = ball.dismissalType || '';
+                    }
+                  }
+                });
+              }
+            });
+          }
+        });
+      }
+
+      const strikeRate = balls > 0 ? parseFloat(((runs / balls) * 100).toFixed(2)) : 0;
+
+      return {
+        runs,
+        balls,
+        fours,
+        sixes,
+        strikeRate,
+        isOut,
+        dismissals: dismissal
+      };
+    };
+
+    // ✅ SIMPLIFIED: Calculate bowling stats ONLY from overHistory
+    const calculateBowlingStats = (playerId, inningsNumber) => {
+      if (!playerId) return null;
+
+      const playerIdStr = playerId.toString();
+      
+      let overs = 0;
+      let runsConceded = 0;
+      let wickets = 0;
+      let maidens = 0;
+      let wides = 0;
+      let noBalls = 0;
+
+      if (match.scores && match.scores.length > 0) {
+        match.scores.forEach(score => {
+          const scoreInnings = score.innings || 1;
+          if (scoreInnings !== inningsNumber) return;
+          
+          if (score.overHistory) {
+            score.overHistory.forEach(over => {
+              if (over.balls && over.balls.length > 0) {
+                const firstBallBowler = over.balls[0]?.bowler?.toString();
+                if (firstBallBowler === playerIdStr) {
+                  overs += 1;
+                  
+                  let overRuns = 0;
+                  let overWickets = 0;
+                  let overWides = 0;
+                  let overNoBalls = 0;
+                  let isMaiden = true;
+                  
+                  over.balls.forEach(ball => {
+                    if (ball.bowler?.toString() === playerIdStr) {
+                      overRuns += ball.runs || 0;
+                      
+                      if (ball.extraType === 'wide' || ball.extraType === 'noball') {
+                        overRuns += 1;
+                      }
+                      
+                      if (ball.wicket) overWickets += 1;
+                      if (ball.extraType === 'wide') overWides += 1;
+                      if (ball.extraType === 'noball') overNoBalls += 1;
+                      
+                      if ((ball.runs || 0) > 0 && ball.extraType !== 'wide' && ball.extraType !== 'noball') {
+                        isMaiden = false;
+                      }
+                    }
+                  });
+                  
+                  runsConceded += overRuns;
+                  wickets += overWickets;
+                  wides += overWides;
+                  noBalls += overNoBalls;
+                  if (isMaiden) maidens += 1;
+                }
+              }
+            });
+          }
+        });
+      }
+
+      const economy = overs > 0 ? parseFloat((runsConceded / overs).toFixed(2)) : 0;
+
+      return {
+        overs: parseFloat(overs.toFixed(1)),
+        runsConceded,
+        wickets,
+        maidens,
+        economy,
+        wides,
+        noBalls
+      };
+    };
+
+    // ✅ ADD STATUS TO TEAM PLAYERS
+    const addStatusToTeamPlayers = (team) => {
+      if (!team || !team.players) return team;
+
+      return {
+        _id: team._id,
+        teamName: team.teamName,
+        players: team.players.map(player => {
+          const playerIdStr = player._id.toString();
+          
+          const playerStatusData = match.playerStatuses?.find(ps => 
+            ps.playerId.toString() === playerIdStr
+          );
+          
+          return {
+            name: player.name,
+            _id: player._id,
+            status: playerStatusData?.playerStatus || 'Not Playing'
+          };
+        })
+      };
+    };
+
+    // ✅ TEAM STATUS DETERMINATION
+    const determineTeamStatus = () => {
+      const currentInnings = match.currentInnings || 1;
+      let battingTeam = null;
+      let bowlingTeam = null;
+
+      if (currentInnings === 1) {
+        battingTeam = match.team1;
+        bowlingTeam = match.team2;
+      } else if (currentInnings === 2) {
+        battingTeam = match.team2;
+        bowlingTeam = match.team1;
+      }
+
+      return {
+        battingTeam,
+        bowlingTeam,
+        currentInnings,
+        totalInnings: match.totalInnings || 2,
+        matchStatus: match.status || 'live'
+      };
+    };
+
+    const teamStatus = determineTeamStatus();
+
+    // ✅ CREATE TEAMS WITH STATUS
+    const team1WithStatus = addStatusToTeamPlayers(match.team1);
+    const team2WithStatus = addStatusToTeamPlayers(match.team2);
+
+    // ✅ SIMPLIFIED SCORECARD GENERATION
+    const generateScorecard = () => {
+      const inningsData = [];
+      const totalInnings = 2;
+
+      for (let inningsNumber = 1; inningsNumber <= totalInnings; inningsNumber++) {
+        
+        let score = match.scores?.find(s => s.innings === inningsNumber);
+        
+        if (!score) {
+          score = {
+            innings: inningsNumber,
+            runs: 0,
+            wickets: 0,
+            overs: 0,
+            runRate: 0,
+            extras: {
+              wides: 0,
+              noBalls: 0,
+              byes: 0,
+              legByes: 0,
+              penalties: 0,
+              total: 0
+            },
+            overHistory: [],
+            currentOver: {},
+            fallOfWickets: []
+          };
+        }
+
+        // ✅ TEAMS DETERMINATION
+        let battingTeam, bowlingTeam;
+        if (inningsNumber === 1) {
+          battingTeam = {
+            id: team1WithStatus._id,
+            name: team1WithStatus.teamName
+          };
+          bowlingTeam = {
+            id: team2WithStatus._id,
+            name: team2WithStatus.teamName
+          };
+        } else {
+          battingTeam = {
+            id: team2WithStatus._id,
+            name: team2WithStatus.teamName
+          };
+          bowlingTeam = {
+            id: team1WithStatus._id,
+            name: team1WithStatus.teamName
+          };
+        }
+
+        // ✅ BATTING DATA
+        const battingData = [];
+        const battingTeamPlayers = inningsNumber === 1 ? team1WithStatus.players : team2WithStatus.players;
+        
+        battingTeamPlayers.forEach(teamPlayer => {
+          const playerIdStr = teamPlayer._id.toString();
+          const playerName = playerNameMap.get(playerIdStr) || teamPlayer.name;
+          const playerStats = calculateBattingStats(teamPlayer._id, inningsNumber);
+          
+          const playerStatusData = match.playerStatuses?.find(ps => 
+            ps.playerId.toString() === playerIdStr
+          );
+          
+          let status = playerStatusData?.playerStatus || 'Not Played Yet';
+          let isNotOut = true;
+          let dismissal = '';
+          
+          if (playerStats && (playerStats.runs > 0 || playerStats.balls > 0)) {
+            isNotOut = !playerStats.isOut;
+            dismissal = playerStats.dismissals || '';
+            
+            if (inningsNumber === match.currentInnings) {
+              status = isNotOut ? 'Batting' : 'Out';
+            } else {
+              status = isNotOut ? 'Not Out' : 'Out';
+            }
+          }
+
+          battingData.push({
+            playerId: teamPlayer._id,
+            playerName: playerName,
+            runs: playerStats?.runs || 0,
+            balls: playerStats?.balls || 0,
+            fours: playerStats?.fours || 0,
+            sixes: playerStats?.sixes || 0,
+            strikeRate: playerStats?.strikeRate || 0,
+            dismissal: dismissal,
+            isNotOut: isNotOut,
+            status: status
+          });
+        });
+
+        // ✅ BOWLING DATA
+        const bowlingData = [];
+        const bowlingTeamPlayers = inningsNumber === 1 ? team2WithStatus.players : team1WithStatus.players;
+        
+        bowlingTeamPlayers.forEach(teamPlayer => {
+          const playerIdStr = teamPlayer._id.toString();
+          const playerName = playerNameMap.get(playerIdStr) || teamPlayer.name;
+          const playerStats = calculateBowlingStats(teamPlayer._id, inningsNumber);
+          
+          const playerStatusData = match.playerStatuses?.find(ps => 
+            ps.playerId.toString() === playerIdStr
+          );
+          
+          let status = playerStatusData?.playerStatus || 'Not Played Yet';
+
+          if (playerStats && (playerStats.overs > 0 || playerStats.wickets > 0 || playerStats.runsConceded > 0)) {
+            status = 'Bowled';
+          }
+
+          bowlingData.push({
+            playerId: teamPlayer._id,
+            playerName: playerName,
+            overs: playerStats?.overs || 0,
+            maidens: playerStats?.maidens || 0,
+            runs: playerStats?.runsConceded || 0,
+            wickets: playerStats?.wickets || 0,
+            economy: playerStats?.economy || 0,
+            wides: playerStats?.wides || 0,
+            noBalls: playerStats?.noBalls || 0,
+            status: status
+          });
+        });
+
+        // ✅ EXTRAS DATA
+        const calculateExtrasFromOverHistory = () => {
+          let wides = 0;
+          let noBalls = 0;
+          let byes = 0;
+          let legByes = 0;
+          let penalties = 0;
+
+          if (score.overHistory) {
+            score.overHistory.forEach(over => {
+              if (over.balls) {
+                over.balls.forEach(ball => {
+                  if (ball.extraType === 'wide') wides += 1;
+                  else if (ball.extraType === 'noball') noBalls += 1;
+                  else if (ball.extraType === 'bye') byes += (ball.runs || 0);
+                  else if (ball.extraType === 'legbye') legByes += (ball.runs || 0);
+                });
+              }
+            });
+          }
+
+          const total = wides + noBalls + byes + legByes + penalties;
+
+          return {
+            wides,
+            noBalls,
+            byes,
+            legByes,
+            penalties,
+            total
+          };
+        };
+
+        const extras = calculateExtrasFromOverHistory();
+
+        inningsData.push({
+          inningsNumber: inningsNumber,
+          battingTeam: battingTeam,
+          bowlingTeam: bowlingTeam,
+          totalRuns: score.runs || 0,
+          totalWickets: score.wickets || 0,
+          totalOvers: score.overs || 0,
+          runRate: score.runRate || 0,
+          extras: extras,
+          batting: battingData,
+          bowling: bowlingData
+        });
+      }
+
+      // Match summary
+      const matchSummary = {
+        toss: {
+          winner: match.toss?.winner || null,
+          elected: match.decision || 'bat',
+          winnerName: match.toss?.winner ? 
+            (match.toss.winner.toString() === team1WithStatus._id.toString() ? 
+              team1WithStatus.teamName : team2WithStatus.teamName) : null
+        },
+        result: match.status === 'completed' ? 'Match Completed' : 
+                match.status === 'upcoming' ? 'Match Not Started' : 'Match in Progress',
+        currentInnings: match.currentInnings || 1,
+        venue: match.venue,
+        date: match.date,
+        matchType: match.matchType
+      };
+
+      return {
+        innings: inningsData,
+        matchSummary: matchSummary
+      };
+    };
+
+    const scorecard = generateScorecard();
+
+    // ✅ FINAL SIMPLIFIED RESPONSE
+    return res.status(200).json({
+      success: true,
+      match: {
+        _id: match._id,
+        team1: team1WithStatus,
+        team2: team2WithStatus,
+        scorecard: scorecard,
+        matchStatus: match.status,
+        currentInnings: match.currentInnings || 1,
+        venue: match.venue,
+        date: match.date,
+        matchType: match.matchType
+      }
     });
 
   } catch (error) {
-    console.error("Error updating score:", error);
-    res.status(500).json({ success: false, message: "Internal server error ❌" });
+    console.error("Error fetching single match:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error",
+      error: error.message
+    });
+  }
+};
+
+
+// Start Badminton Match Controller
+export const startBadmintonMatch = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+    const {
+      startTime,
+      totalSets,
+      pointsPerSet,
+      winBy,
+      allowDeuce,
+      maxDeucePoint,
+      currentSet
+    } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(matchId)) {
+      return res.status(400).json({ success: false, message: "Invalid match ID ❌" });
+    }
+
+    const match = await GameMatch.findById(matchId).populate('teams.teamId');
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found ❌" });
+    }
+
+    match.status = 'live';
+    match.currentStatus = 'in-progress'; // or any relevant status for badminton
+    match.startedAt = new Date();
+    match.startTime = startTime || new Date();
+    match.totalSets = totalSets || 3;
+    match.pointsPerSet = pointsPerSet || 21;
+    match.winBy = winBy || 2;
+    match.allowDeuce = allowDeuce ?? true;
+    match.maxDeucePoint = maxDeucePoint || 30;
+    match.currentSet = currentSet || 1;
+
+    // Initialize scoreCard for badminton
+    match.scoreCard = match.teams.map(({ teamId }) => ({
+      teamId: teamId._id,
+      teamName: teamId.name,
+      teamGoals: 0, // or teamPoints if you want to rename
+      players: teamId.players.map(player => ({
+        playerId: player._id,
+        playerName: player.name,
+        points: 0,
+        warningCards: {
+          yellow: 0,
+          red: 0,
+        },
+        isOut: false,
+      }))
+    }));
+
+    await match.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Badminton match started successfully ✅",
+      match: {
+        _id: match._id,
+        name: match.name,
+        status: match.status,
+        currentStatus: match.currentStatus,
+        startedAt: match.startedAt,
+        startTime: match.startTime,
+        totalSets: match.totalSets,
+        pointsPerSet: match.pointsPerSet,
+        winBy: match.winBy,
+        allowDeuce: match.allowDeuce,
+        maxDeucePoint: match.maxDeucePoint,
+        currentSet: match.currentSet,
+        scoreCard: match.scoreCard,
+      }
+    });
+
+  } catch (error) {
+    console.error('Error starting badminton match:', error);
+    return res.status(500).json({ success: false, message: "Internal server error ❌" });
+  }
+};
+
+
+
+export const getSingleBadmintonById = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+
+    if (!matchId) {
+      return res.status(400).json({ success: false, message: "Match ID is required" });
+    }
+
+    if (!mongoose.isValidObjectId(matchId)) {
+      return res.status(400).json({ success: false, message: "Invalid match ID format" });
+    }
+
+    const match = await GameMatch.findById(matchId)
+      .populate({
+        path: "createdBy",
+        select: "name email",
+      })
+      .populate({
+        path: "categoryId",
+        select: "name",
+      })
+      .populate({
+        path: "teams.teamId",
+        model: "GameTeam",
+        populate: {
+          path: "players",
+          model: "User",
+          select: "name email avatar",
+        },
+      });
+
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found ❌" });
+    }
+
+    const scoreCard = match.scoreCard || [];
+    const isTeamMatch = match.teams && match.teams.length > 0;
+
+    let teams = [];
+    let detailedScoreCard = [];
+
+    if (isTeamMatch) {
+      // ✅ TEAM-BASED LOGIC
+      teams = match.teams.map((team) => {
+        const scoreEntry = scoreCard.find(
+          (sc) => sc.teamId?.toString() === team.teamId?._id?.toString()
+        );
+
+        return {
+          teamId: team.teamId?._id,
+          teamName: team.teamId?.teamName || "Unknown Team",
+          teamPoints: scoreEntry?.teamGoals ?? scoreEntry?.teamPoints ?? 0,
+          players:
+            team.teamId?.players.map((p) => {
+              const playerScore = scoreEntry?.players.find(
+                (pl) => pl.playerId?.toString() === p._id?.toString()
+              );
+              return {
+                playerId: p._id,
+                playerName: p.name || "Unknown Player",
+                avatar: p.avatar || "default-avatar.jpg",
+                points: playerScore?.points ?? 0,
+              };
+            }) || [],
+        };
+      });
+
+      // ✅ DETAILED SCORE CARD FOR TEAMS
+      detailedScoreCard = match.teams.map((team) => {
+        const scoreEntry = scoreCard.find(
+          (sc) => sc.teamId?.toString() === team.teamId?._id?.toString()
+        );
+
+        return {
+          teamId: team.teamId?._id,
+          teamName: team.teamId?.teamName || "Unknown Team",
+          teamPoints: scoreEntry?.teamGoals ?? scoreEntry?.teamPoints ?? 0,
+          players: (scoreEntry?.players || []).map(playerScore => {
+            const playerInfo = team.teamId?.players.find(
+              p => p._id.toString() === playerScore.playerId?.toString()
+            );
+            return {
+              playerId: playerScore.playerId,
+              playerName: playerInfo?.name || "Unknown Player",
+              points: playerScore.points || 0,
+              warningCards: playerScore.warningCards || { yellow: 0, red: 0 },
+              isOut: playerScore.isOut || false
+            };
+          })
+        };
+      });
+
+    } else {
+      // ✅ PLAYER-BASED MATCH LOGIC
+      const players = await User.find({
+        name: { $in: match.players },
+      }).select("_id name avatar email");
+
+      teams = players.map((player) => {
+        const playerScoreEntry = scoreCard?.[0]?.players?.find(
+          (p) => p.playerId?.toString() === player._id.toString()
+        );
+
+        return {
+          playerId: player._id,
+          playerName: player.name,
+          avatar: player.avatar || "default-avatar.jpg",
+          email: player.email,
+          points: playerScoreEntry?.points ?? 0,
+        };
+      });
+
+      // ✅ DETAILED SCORE CARD FOR PLAYERS
+      detailedScoreCard = [{
+        teamId: null,
+        teamPoints: 0,
+        players: players.map(player => {
+          const playerScoreEntry = scoreCard?.[0]?.players?.find(
+            (p) => p.playerId?.toString() === player._id.toString()
+          );
+          return {
+            playerId: player._id,
+            playerName: player.name,
+            points: playerScoreEntry?.points ?? 0,
+            warningCards: playerScoreEntry?.warningCards || { yellow: 0, red: 0 },
+            isOut: playerScoreEntry?.isOut || false
+          };
+        })
+      }];
+    }
+
+    // 🔧 Build sets array using teams data
+    const totalSets = match.totalSets || 3;
+    const existingSets = match.sets || [];
+
+    const sets = Array.from({ length: totalSets }, (_, i) => {
+      const setIndex = i + 1;
+      const existingSet = existingSets.find((s) => s.setNumber === setIndex);
+
+      if (isTeamMatch && teams.length >= 2) {
+        const teamA = teams[0];
+        const teamB = teams[1];
+
+        if (existingSet) {
+          return {
+            ...existingSet.toObject(),
+            score: {
+              teamA: {
+                name: teamA.teamName,
+                score: existingSet.score.teamA || 0,
+                teamId: teamA.teamId
+              },
+              teamB: {
+                name: teamB.teamName,
+                score: existingSet.score.teamB || 0,
+                teamId: teamB.teamId
+              }
+            },
+            winner: existingSet.winner === "teamA" ? teamA.teamName : 
+                    existingSet.winner === "teamB" ? teamB.teamName : null,
+            winnerId: existingSet.winner === "teamA" ? teamA.teamId : 
+                      existingSet.winner === "teamB" ? teamB.teamId : null
+          };
+        } else {
+          return {
+            setNumber: setIndex,
+            score: {
+              teamA: {
+                name: teamA.teamName,
+                score: 0,
+                teamId: teamA.teamId
+              },
+              teamB: {
+                name: teamB.teamName,
+                score: 0,
+                teamId: teamB.teamId
+              }
+            },
+            winner: null,
+            winnerId: null
+          };
+        }
+      } else {
+        // Player-based match (existing code)
+        return existingSet || {
+          setNumber: setIndex,
+          score: { playerA: 0, playerB: 0 },
+          winner: null,
+        };
+      }
+    });
+
+    // 🔧 FinalScore using teams data
+    let finalScore = match.finalScore;
+    if (isTeamMatch && teams.length >= 2) {
+      const teamA = teams[0];
+      const teamB = teams[1];
+      
+      if (match.finalScore) {
+        finalScore = {
+          teamA: {
+            name: teamA.teamName,
+            score: match.finalScore.teamA || 0,
+            teamId: teamA.teamId
+          },
+          teamB: {
+            name: teamB.teamName,
+            score: match.finalScore.teamB || 0,
+            teamId: teamB.teamId
+          }
+        };
+      } else {
+        finalScore = {
+          teamA: {
+            name: teamA.teamName,
+            score: 0,
+            teamId: teamA.teamId
+          },
+          teamB: {
+            name: teamB.teamName,
+            score: 0,
+            teamId: teamB.teamId
+          }
+        };
+      }
+    } else if (!isTeamMatch) {
+      // Player-based final score
+      finalScore = match.finalScore || { playerA: 0, playerB: 0 };
+    }
+
+    // 🔧 Winner field ko bhi update karein agar match finished hai
+    let matchWinner = match.winner;
+    if (isTeamMatch && match.status === "finished" && matchWinner && teams.length >= 2) {
+      const winningTeam = teams.find(team => 
+        team.teamId.toString() === matchWinner.toString()
+      );
+      if (winningTeam) {
+        matchWinner = {
+          teamId: winningTeam.teamId,
+          teamName: winningTeam.teamName,
+          players: winningTeam.players
+        };
+      }
+    }
+
+    // 🔧 Scoring Template (agar nahi hai toh default values)
+    const scoringTemplate = match.scoringTemplate || {
+      setsToWin: match.totalSets ? Math.ceil(match.totalSets / 2) : 2,
+      pointsToWinSet: match.pointsPerSet || 21,
+      winBy: match.winBy || 2,
+      maxPoints: match.maxDeucePoint || 30,
+      hasGames: false
+    };
+
+    const response = {
+      _id: match._id,
+      name: match.name,
+      categoryId: match.categoryId,
+      createdBy: match.createdBy,
+      status: match.status,
+      currentStatus: match.currentStatus,
+      startTime: match.startTime,
+      totalSets: match.totalSets,
+      pointsPerSet: match.pointsPerSet,
+      winBy: match.winBy,
+      allowDeuce: match.allowDeuce,
+      maxDeucePoint: match.maxDeucePoint,
+      currentSet: match.currentSet,
+      sets,
+      finalScore,
+      winner: matchWinner,
+      createdAt: match.createdAt,
+      updatedAt: match.updatedAt,
+      teams,
+      isTeamMatch,
+      scoreCard: detailedScoreCard,
+      scoringTemplate: scoringTemplate
+    };
+
+    // 🟢 Emit fetched data
+    const io = req.app.get("io");
+    io.emit("badminton:match:fetched", {
+      matchId: match._id,
+      message: "Match data fetched",
+      match: response,
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: "Badminton match fetched successfully ✅",
+      match: response,
+    });
+  } catch (error) {
+    console.error("Error fetching badminton match:", error);
+    return res.status(500).json({ success: false, message: "Internal server error ❌" });
+  }
+};
+
+export const getCompletedGameMatch = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+
+    if (!matchId) {
+      return res.status(400).json({ success: false, message: 'Match ID is required' });
+    }
+
+    if (!mongoose.isValidObjectId(matchId)) {
+      return res.status(400).json({ success: false, message: 'Invalid match ID format' });
+    }
+
+    const match = await GameMatch.findById(matchId)
+      .populate({
+        path: "createdBy",
+        select: "name email",
+      })
+      .populate({
+        path: "categoryId",
+        select: "name",
+      })
+      .populate({
+        path: "teams.teamId",
+        model: "GameTeam",
+        populate: {
+          path: "players",
+          model: "User",
+          select: "name email avatar",
+        },
+      });
+
+    if (!match) {
+      return res.status(404).json({ success: false, message: 'Match not found ❌' });
+    }
+
+    if (match.status !== 'finished') {
+      return res.status(403).json({ 
+        success: false, 
+        message: 'Match data is only available for completed matches ❌' 
+      });
+    }
+
+    const finalScore = match.finalScore || { teamA: 0, teamB: 0 };
+    let winner = null;
+
+    if (finalScore.teamA > finalScore.teamB) {
+      winner = {
+        teamName: match.teams[0]?.teamId?.teamName || "Team A",
+        goals: finalScore.teamA,
+      };
+    } else if (finalScore.teamB > finalScore.teamA) {
+      winner = {
+        teamName: match.teams[1]?.teamId?.teamName || "Team B",
+        goals: finalScore.teamB,
+      };
+    }
+
+    const response = {
+      _id: match._id,
+      name: match.name,
+      categoryId: match.categoryId,
+      createdBy: match.createdBy,
+      status: match.status,
+      currentStatus: match.currentStatus,
+      startKickTime: match.startKickTime,
+      startedAt: match.startedAt,
+      totalDuration: match.totalDuration,
+      halfTimeDuration: match.halfTimeDuration,
+      extraTimeAllowedForHalfTime: match.extraTimeAllowedForHalfTime,
+      extraTimeDurationForHalfTime: match.extraTimeDurationForHalfTime,
+      extraTimeAllowedForFullTime: match.extraTimeAllowedForFullTime,
+      extraTimeDurationForFullTime: match.extraTimeDurationForFullTime,
+      halfTimeScore: match.halfTimeScore,
+      secondHalfScore: match.secondHalfScore,
+      extraTimeScore: match.extraTimeScore,
+      finalScore,
+      penaltyScore: match.penaltyScore || 'N/A',
+      teamScores: match.teamScores || [],
+      winner,  // <--- winner object with teamName and goals here
+      cancelReason: match.cancelReason,
+      createdAt: match.createdAt,
+      updatedAt: match.updatedAt,
+      scoreCard: match.scoreCard || [],
+      teams: match.teams.map(team => ({
+        teamId: team.teamId?._id,
+        teamName: team.teamId?.teamName || 'Unknown Team',
+        players: team.teamId?.players.map(p => ({
+          playerId: p._id,
+          playerName: p.name || 'Unknown Player',
+          email: p.email,
+          avatar: p.avatar || 'default-avatar.jpg',
+        })) || [],
+      })),
+    };
+
+    return res.status(200).json({
+      success: true,
+      message: "Completed match fetched successfully ✅",
+      match: response,
+    });
+
+  } catch (error) {
+    console.error('Error fetching completed match:', error);
+    return res.status(500).json({ success: false, message: 'Internal server error ❌' });
+  }
+};
+
+
+
+export const updateBadmintonMatchFlexible = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+    const updateData = req.body;
+
+    if (!matchId || !mongoose.isValidObjectId(matchId)) {
+      return res.status(400).json({ success: false, message: "Invalid match ID" });
+    }
+
+    const match = await GameMatch.findById(matchId);
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found ❌" });
+    }
+
+    const isTeamMatch = match.teams && match.teams.length > 0;
+
+    // === 1. Update General Match Fields ===
+    const updatableFields = [
+      "status",
+      "currentStatus",
+      "currentSet",
+      "startTime",
+      "totalSets",
+      "pointsPerSet",
+      "winBy",
+      "allowDeuce",
+      "maxDeucePoint",
+      "finalScore",
+      "winner"
+    ];
+
+    updatableFields.forEach(field => {
+      if (updateData[field] !== undefined) {
+        match[field] = updateData[field];
+      }
+    });
+
+    // === 1.1 Auto-set winner of previous set ===
+    if (updateData.currentSet && Number.isInteger(updateData.currentSet)) {
+      const newSet = updateData.currentSet;
+      const prevSetIndex = newSet - 2;
+
+      if (prevSetIndex >= 0 && match.sets && match.sets[prevSetIndex]) {
+        const prevSet = match.sets[prevSetIndex];
+        const score = prevSet.score || {};
+
+        if (isTeamMatch) {
+          const teamAScore = score.teamA || 0;
+          const teamBScore = score.teamB || 0;
+
+          prevSet.winner = teamAScore > teamBScore ? "teamA" : teamBScore > teamAScore ? "teamB" : null;
+        } else {
+          const playerAScore = score.playerA || 0;
+          const playerBScore = score.playerB || 0;
+
+          prevSet.winner = playerAScore > playerBScore ? "playerA" : playerBScore > playerAScore ? "playerB" : null;
+        }
+      }
+
+      // === 1.2 Handle Current Set Winner ===
+      const currentSetIndex = (newSet || 1) - 1;
+      if (match.sets[currentSetIndex]) {
+        const currentSet = match.sets[currentSetIndex];
+        const currentScore = currentSet.score || {};
+
+        if (isTeamMatch) {
+          const teamAScore = currentScore.teamA || 0;
+          const teamBScore = currentScore.teamB || 0;
+
+          // If winner is not set yet, set it based on the current score
+          if (currentSet.winner === null) {
+            currentSet.winner = teamAScore > teamBScore ? "teamA" : teamBScore > teamAScore ? "teamB" : null;
+          }
+        } else {
+          const playerAScore = currentScore.playerA || 0;
+          const playerBScore = currentScore.playerB || 0;
+
+          if (currentSet.winner === null) {
+            currentSet.winner = playerAScore > playerBScore ? "playerA" : playerBScore > playerAScore ? "playerB" : null;
+          }
+        }
+      }
+    }
+
+    // === 2. Update Player or Team Points ===
+    if (updateData.points !== undefined && updateData.action) {
+      const { points, action } = updateData;
+      const pointChange = action === "inc" ? points : -points;
+      match.scoreCard = match.scoreCard || [];
+
+      if (isTeamMatch) {
+        const { teamId, playerId } = updateData;
+        if (!teamId || !playerId) {
+          return res.status(400).json({ success: false, message: "Team ID and Player ID are required" });
+        }
+
+        // TEAM-based match logic
+        let teamScore = match.scoreCard.find(sc => sc.teamId.toString() === teamId);
+        if (!teamScore) {
+          teamScore = { teamId, teamGoals: 0, players: [] };
+          match.scoreCard.push(teamScore);
+        }
+
+        teamScore.teamGoals += pointChange;
+        if (teamScore.teamGoals < 0) teamScore.teamGoals = 0;
+
+        let playerScore = teamScore.players.find(p => p.playerId.toString() === playerId);
+        if (!playerScore) {
+          playerScore = {
+            playerId,
+            goals: 0,
+            points: 0,
+            warningCards: { yellow: 0, red: 0 },
+            isOut: false
+          };
+          teamScore.players.push(playerScore);
+        }
+
+        playerScore.points += pointChange;
+        if (playerScore.points < 0) playerScore.points = 0;
+
+        // === 3. Update Current Set Score (TEAM-based) ===
+        const currentSetIndex = (match.currentSet || 1) - 1;
+        match.sets = match.sets || [];
+        while (match.sets.length <= currentSetIndex) {
+          match.sets.push({ setNumber: match.sets.length + 1, score: { teamA: 0, teamB: 0 }, winner: null });
+        }
+
+        const teamIndex = match.teams.findIndex(t => t.teamId.toString() === teamId);
+        if (teamIndex === 0) {
+          match.sets[currentSetIndex].score.teamA += pointChange;
+          if (match.sets[currentSetIndex].score.teamA < 0) match.sets[currentSetIndex].score.teamA = 0;
+        } else if (teamIndex === 1) {
+          match.sets[currentSetIndex].score.teamB += pointChange;
+          if (match.sets[currentSetIndex].score.teamB < 0) match.sets[currentSetIndex].score.teamB = 0;
+        }
+
+      } else {
+        // PLAYER-based match logic
+        const { playerId } = updateData;
+        if (!playerId) {
+          return res.status(400).json({ success: false, message: "Player ID is required" });
+        }
+
+        let playerScore = match.scoreCard?.[0]?.players?.find(p => p.playerId.toString() === playerId);
+
+        if (!match.scoreCard[0]) {
+          match.scoreCard[0] = { teamId: null, players: [] };
+        }
+
+        if (!playerScore) {
+          playerScore = {
+            playerId,
+            goals: 0,
+            points: 0,
+            warningCards: { yellow: 0, red: 0 },
+            isOut: false
+          };
+          match.scoreCard[0].players.push(playerScore);
+        }
+
+        playerScore.points += pointChange;
+        if (playerScore.points < 0) playerScore.points = 0;
+
+        // === 3. Update Current Set Score (PLAYER-based) ===
+        const currentSetIndex = (match.currentSet || 1) - 1;
+        match.sets = match.sets || [];
+        while (match.sets.length <= currentSetIndex) {
+          match.sets.push({
+            setNumber: match.sets.length + 1,
+            score: { playerA: 0, playerB: 0 },
+            winner: null
+          });
+        }
+
+        const playerIndex = match.players.findIndex(p => p.toString() === playerId.toString());
+
+        if (playerIndex === 0) {
+          match.sets[currentSetIndex].score.playerA += pointChange;
+          if (match.sets[currentSetIndex].score.playerA < 0) match.sets[currentSetIndex].score.playerA = 0;
+        } else if (playerIndex === 1) {
+          match.sets[currentSetIndex].score.playerB += pointChange;
+          if (match.sets[currentSetIndex].score.playerB < 0) match.sets[currentSetIndex].score.playerB = 0;
+        }
+      }
+    }
+
+    // === 4. If match is being finished and it’s the last set, calculate finalScore and winner ===
+    if (match.status === "finished" && match.currentSet === match.totalSets && Array.isArray(match.sets)) {
+      let scoreA = 0;
+      let scoreB = 0;
+
+      match.sets.forEach(set => {
+        if (isTeamMatch) {
+          if (set.winner === "teamA") scoreA += 1;
+          else if (set.winner === "teamB") scoreB += 1;
+        } else {
+          if (set.winner === "playerA") scoreA += 1;
+          else if (set.winner === "playerB") scoreB += 1;
+        }
+      });
+
+      // Final scores
+      match.finalScore = {
+        teamA: scoreA,
+        teamB: scoreB
+      };
+
+      // Determine winner based on the final score
+      if (scoreA > scoreB) {
+        match.winner = isTeamMatch ? match.teams[0]?.teamId : match.players[0];
+      } else if (scoreB > scoreA) {
+        match.winner = isTeamMatch ? match.teams[1]?.teamId : match.players[1];
+      } else {
+        match.winner = null; // If it's a draw
+      }
+    }
+
+    // === 5. Save Match ===
+    await match.save();
+
+    // === 6. Populate & Emit ===
+    const updatedMatch = await GameMatch.findById(matchId)
+      .populate("createdBy", "name email")
+      .populate("categoryId", "name")
+      .populate({
+        path: "teams.teamId",
+        model: "GameTeam",
+        populate: {
+          path: "players",
+          model: "User",
+          select: "name email avatar",
+        },
+      })
+      .populate("winner", "teamName");
+
+    const io = req.app.get("io");
+    io.emit("badminton:match:updated", updatedMatch);
+
+    return res.status(200).json({
+      success: true,
+      message: "Badminton match updated successfully ✅",
+      match: updatedMatch,
+    });
+  } catch (error) {
+    console.error("Error updating badminton match:", error);
+    return res.status(500).json({ success: false, message: "Internal server error ❌" });
   }
 };

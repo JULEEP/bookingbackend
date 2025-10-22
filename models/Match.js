@@ -325,7 +325,39 @@ totalOvers: { type: Number, default: 0 },  // or your match overs config
     playerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     points: { type: Number, default: 0 },
     reason: { type: String }
-  }]
+  }],
+
+  playerStatuses: [
+  {
+    playerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User', // ya jo bhi tumhara player ka model hai
+      required: true,
+    },
+    teamId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Team', // ya GameTeam, agar alag naam hai
+      required: true,
+    },
+    playerName: {
+      type: String,
+      required: true,
+    },
+    playerStatus: {
+      type: String,
+      required: true,
+      enum: [
+        "Batting (Striker)",
+        "Batting (Non-Striker)",
+        "Yet to Bat",
+        "Bowling",
+        "Fielding",
+        "Out"
+      ],
+    },
+  }
+],
+
   },
   { timestamps: true }
 );

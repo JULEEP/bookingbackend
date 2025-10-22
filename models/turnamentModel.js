@@ -13,7 +13,6 @@ const tournamentSchema = new mongoose.Schema({
   numberOfTeams: { type: Number, },
   format: {
     type: String,
-    enum: ['T20', 'ODI', 'Test'], // ✅ You can change based on your requirement
   },
   tournamentType: {
     type: String,
@@ -37,6 +36,16 @@ const tournamentSchema = new mongoose.Schema({
     enum: ['upcoming', 'live', 'completed', 'enabled'],
     default: 'upcoming'
   },
+
+  gameType: {
+  type: String,
+},
+
+categoryId: {
+  type: mongoose.Schema.Types.ObjectId,
+  ref: 'GameCategory',
+  default: null,
+},
    teams: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Team' }]
 }, { timestamps: true });
 
