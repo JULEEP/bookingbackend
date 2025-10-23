@@ -309,6 +309,13 @@ totalOvers: { type: Number, default: 0 },  // or your match overs config
   
   // Match commentary
   commentary: [{ type: String }],
+
+
+  lastOperation: {
+    type: String,
+    enum: ['add_ball', 'undo'],
+    default: 'add_ball'
+  },
   
   // Match result
   matchResult: {
@@ -332,20 +339,16 @@ totalOvers: { type: Number, default: 0 },  // or your match overs config
     playerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User', // ya jo bhi tumhara player ka model hai
-      required: true,
     },
     teamId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Team', // ya GameTeam, agar alag naam hai
-      required: true,
     },
     playerName: {
       type: String,
-      required: true,
     },
     playerStatus: {
       type: String,
-      required: true,
       enum: [
         "Batting (Striker)",
         "Batting (Non-Striker)",

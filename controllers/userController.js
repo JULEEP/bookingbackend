@@ -3418,36 +3418,62 @@ const emitLiveUpdate = (updateType, data) => {
     };
 
     // ✅ UPDATE PLAYER STATUSES FUNCTION
-    const updatePlayerStatus = (playerId, newStatus) => {
-      if (!playerId || !match.playerStatuses) return;
-      
-      const playerStatusIndex = match.playerStatuses.findIndex(ps => 
-        ps.playerId.toString() === playerId.toString()
-      );
-      
-      if (playerStatusIndex !== -1) {
-        match.playerStatuses[playerStatusIndex].playerStatus = newStatus;
-      } else {
-        // Agar playerStatuses mein nahi hai to add karo
-        const teamId = [match.team1, match.team2].find(teamId => {
-          const team = Team.findById(teamId);
-          if (team) {
-            return team.players.find(p => p._id.toString() === playerId.toString());
-          }
-          return false;
-        });
-        
-        if (teamId) {
-          match.playerStatuses.push({
-            playerId: playerId,
-            teamId: teamId,
-            playerName: "Player",
-            playerStatus: newStatus
-          });
-        }
+   // ✅ UPDATE PLAYER STATUSES FUNCTION - COMPLETE FIXED VERSION
+const updatePlayerStatus = (playerId, newStatus) => {
+  if (!playerId) {
+    console.log(`⚠️ Player ID undefined, skipping status update`);
+    return;
+  }
+  
+  // ✅ ENSURE playerStatuses ARRAY EXISTS
+  if (!match.playerStatuses) {
+    match.playerStatuses = [];
+    console.log(`🆕 Initialized playerStatuses array`);
+  }
+  
+  const playerStatusIndex = match.playerStatuses.findIndex(ps => 
+    ps.playerId && ps.playerId.toString() === playerId.toString()
+  );
+  
+  if (playerStatusIndex !== -1) {
+    match.playerStatuses[playerStatusIndex].playerStatus = newStatus;
+    console.log(`🎯 PlayerStatus updated: ${playerId} -> ${newStatus}`);
+  } else {
+    // Agar playerStatuses mein nahi hai to add karo
+    console.log(`🆕 Adding new PlayerStatus: ${playerId} -> ${newStatus}`);
+    
+    // Player ka name find karo
+    let playerName = "Player";
+    let teamId = null;
+    
+    // Team1 mein search karo
+    if (match.team1 && match.team1.players) {
+      const player = match.team1.players.find(p => p._id.toString() === playerId.toString());
+      if (player) {
+        playerName = player.name;
+        teamId = match.team1._id;
       }
-    };
-
+    }
+    
+    // Team2 mein search karo
+    if (!teamId && match.team2 && match.team2.players) {
+      const player = match.team2.players.find(p => p._id.toString() === playerId.toString());
+      if (player) {
+        playerName = player.name;
+        teamId = match.team2._id;
+      }
+    }
+    
+    match.playerStatuses.push({
+      playerId: playerId,
+      teamId: teamId,
+      playerName: playerName,
+      playerStatus: newStatus
+    });
+    
+    console.log(`✅ New PlayerStatus added: ${playerName} (${playerId}) -> ${newStatus}`);
+  }
+};
     // ✅ 1. MATCH STATUS UPDATE
     if (matchStatus) {
       match.status = matchStatus;
@@ -6256,98 +6282,59 @@ export const getSingleBadmintonById = async (req, res) => {
     let detailedScoreCard = [];
 
     if (isTeamMatch) {
-      // ✅ TEAM-BASED LOGIC
+      // TEAM-BASED LOGIC without points/goals/warnings
       teams = match.teams.map((team) => {
-        const scoreEntry = scoreCard.find(
-          (sc) => sc.teamId?.toString() === team.teamId?._id?.toString()
-        );
-
         return {
           teamId: team.teamId?._id,
           teamName: team.teamId?.teamName || "Unknown Team",
-          teamPoints: scoreEntry?.teamGoals ?? scoreEntry?.teamPoints ?? 0,
           players:
-            team.teamId?.players.map((p) => {
-              const playerScore = scoreEntry?.players.find(
-                (pl) => pl.playerId?.toString() === p._id?.toString()
-              );
-              return {
-                playerId: p._id,
-                playerName: p.name || "Unknown Player",
-                avatar: p.avatar || "default-avatar.jpg",
-                points: playerScore?.points ?? 0,
-              };
-            }) || [],
+            team.teamId?.players.map((p) => ({
+              playerId: p._id,
+              playerName: p.name || "Unknown Player",
+              avatar: p.avatar || "default-avatar.jpg",
+            })) || [],
         };
       });
 
-      // ✅ DETAILED SCORE CARD FOR TEAMS
+      // SIMPLIFIED SCORE CARD - only teamPoints and basic player info
       detailedScoreCard = match.teams.map((team) => {
-        const scoreEntry = scoreCard.find(
-          (sc) => sc.teamId?.toString() === team.teamId?._id?.toString()
-        );
-
+        const teamScore = scoreCard.find(sc => sc.teamId?.toString() === team.teamId?._id?.toString());
+        
         return {
           teamId: team.teamId?._id,
           teamName: team.teamId?.teamName || "Unknown Team",
-          teamPoints: scoreEntry?.teamGoals ?? scoreEntry?.teamPoints ?? 0,
-          players: (scoreEntry?.players || []).map(playerScore => {
-            const playerInfo = team.teamId?.players.find(
-              p => p._id.toString() === playerScore.playerId?.toString()
-            );
-            return {
-              playerId: playerScore.playerId,
-              playerName: playerInfo?.name || "Unknown Player",
-              points: playerScore.points || 0,
-              goals: playerScore.goals || 0,
-              warningCards: playerScore.warningCards || { yellow: 0, red: 0 },
-              isOut: playerScore.isOut || false
-            };
-          })
+          teamPoints: teamScore?.teamGoals || 0, // teamGoals ko teamPoints kardo
+          players: (team.teamId?.players || []).map((p) => ({
+            playerId: p._id,
+            playerName: p.name || "Unknown Player",
+            avatar: p.avatar || "default-avatar.jpg",
+          })),
         };
       });
 
     } else {
-      // ✅ PLAYER-BASED MATCH LOGIC
+      // PLAYER-BASED MATCH LOGIC without points/goals/warnings
       const players = await User.find({
         name: { $in: match.players },
       }).select("_id name avatar email");
 
-      teams = players.map((player) => {
-        const playerScoreEntry = scoreCard?.[0]?.players?.find(
-          (p) => p.playerId?.toString() === player._id.toString()
-        );
+      teams = players.map((player) => ({
+        playerId: player._id,
+        playerName: player.name,
+        avatar: player.avatar || "default-avatar.jpg",
+        email: player.email,
+      }));
 
-        return {
-          playerId: player._id,
-          playerName: player.name,
-          avatar: player.avatar || "default-avatar.jpg",
-          email: player.email,
-          points: playerScoreEntry?.points ?? 0,
-        };
-      });
-
-      // ✅ DETAILED SCORE CARD FOR PLAYERS
       detailedScoreCard = [{
         teamId: null,
-        teamPoints: 0,
-        players: players.map(player => {
-          const playerScoreEntry = scoreCard?.[0]?.players?.find(
-            (p) => p.playerId?.toString() === player._id.toString()
-          );
-          return {
-            playerId: player._id,
-            playerName: player.name,
-            points: playerScoreEntry?.points ?? 0,
-            goals: playerScoreEntry?.goals ?? 0,
-            warningCards: playerScoreEntry?.warningCards || { yellow: 0, red: 0 },
-            isOut: playerScoreEntry?.isOut || false
-          };
-        })
+        players: players.map(player => ({
+          playerId: player._id,
+          playerName: player.name,
+        })),
       }];
     }
 
-    // 🔧 Build sets array using teams data
+    // Sets & finalScore logic unchanged
     const totalSets = match.totalSets || 3;
     const existingSets = match.sets || [];
 
@@ -6366,18 +6353,26 @@ export const getSingleBadmintonById = async (req, res) => {
               teamA: {
                 name: teamA.teamName,
                 score: existingSet.score.teamA || 0,
-                teamId: teamA.teamId
+                teamId: teamA.teamId,
               },
               teamB: {
                 name: teamB.teamName,
                 score: existingSet.score.teamB || 0,
-                teamId: teamB.teamId
-              }
+                teamId: teamB.teamId,
+              },
             },
-            winner: existingSet.winner === "teamA" ? teamA.teamName : 
-                    existingSet.winner === "teamB" ? teamB.teamName : null,
-            winnerId: existingSet.winner === "teamA" ? teamA.teamId : 
-                      existingSet.winner === "teamB" ? teamB.teamId : null
+            winner:
+              existingSet.winner === "teamA"
+                ? teamA.teamName
+                : existingSet.winner === "teamB"
+                ? teamB.teamName
+                : null,
+            winnerId:
+              existingSet.winner === "teamA"
+                ? teamA.teamId
+                : existingSet.winner === "teamB"
+                ? teamB.teamId
+                : null,
           };
         } else {
           return {
@@ -6386,88 +6381,87 @@ export const getSingleBadmintonById = async (req, res) => {
               teamA: {
                 name: teamA.teamName,
                 score: 0,
-                teamId: teamA.teamId
+                teamId: teamA.teamId,
               },
               teamB: {
                 name: teamB.teamName,
                 score: 0,
-                teamId: teamB.teamId
-              }
+                teamId: teamB.teamId,
+              },
             },
             winner: null,
-            winnerId: null
+            winnerId: null,
           };
         }
       } else {
-        // Player-based match (existing code)
-        return existingSet || {
-          setNumber: setIndex,
-          score: { playerA: 0, playerB: 0 },
-          winner: null,
-        };
+        return (
+          existingSet || {
+            setNumber: setIndex,
+            score: { playerA: 0, playerB: 0 },
+            winner: null,
+          }
+        );
       }
     });
 
-    // 🔧 FinalScore using teams data
+    // Final score handling
     let finalScore = match.finalScore;
     if (isTeamMatch && teams.length >= 2) {
       const teamA = teams[0];
       const teamB = teams[1];
-      
+
       if (match.finalScore) {
         finalScore = {
           teamA: {
             name: teamA.teamName,
             score: match.finalScore.teamA || 0,
-            teamId: teamA.teamId
+            teamId: teamA.teamId,
           },
           teamB: {
             name: teamB.teamName,
             score: match.finalScore.teamB || 0,
-            teamId: teamB.teamId
-          }
+            teamId: teamB.teamId,
+          },
         };
       } else {
         finalScore = {
           teamA: {
             name: teamA.teamName,
             score: 0,
-            teamId: teamA.teamId
+            teamId: teamA.teamId,
           },
           teamB: {
             name: teamB.teamName,
             score: 0,
-            teamId: teamB.teamId
-          }
+            teamId: teamB.teamId,
+          },
         };
       }
     } else if (!isTeamMatch) {
-      // Player-based final score
       finalScore = match.finalScore || { playerA: 0, playerB: 0 };
     }
 
-    // 🔧 Winner field ko bhi update karein agar match finished hai
+    // Winner field
     let matchWinner = match.winner;
     if (isTeamMatch && match.status === "finished" && matchWinner && teams.length >= 2) {
-      const winningTeam = teams.find(team => 
-        team.teamId.toString() === matchWinner.toString()
+      const winningTeam = teams.find(
+        (team) => team.teamId.toString() === matchWinner.toString()
       );
       if (winningTeam) {
         matchWinner = {
           teamId: winningTeam.teamId,
           teamName: winningTeam.teamName,
-          players: winningTeam.players
+          players: winningTeam.players,
         };
       }
     }
 
-    // 🔧 Scoring Template (agar nahi hai toh default values)
     const scoringTemplate = match.scoringTemplate || {
       setsToWin: match.totalSets ? Math.ceil(match.totalSets / 2) : 2,
       pointsToWinSet: match.pointsPerSet || 21,
       winBy: match.winBy || 2,
       maxPoints: match.maxDeucePoint || 30,
-      hasGames: false
+      hasGames: false,
     };
 
     const response = {
@@ -6491,11 +6485,10 @@ export const getSingleBadmintonById = async (req, res) => {
       updatedAt: match.updatedAt,
       teams,
       isTeamMatch,
-      scoreCard: detailedScoreCard,
-      scoringTemplate: scoringTemplate
+      scoreCard: detailedScoreCard, // Simplified scoreCard
+      scoringTemplate,
     };
 
-    // 🟢 Emit fetched data
     const io = req.app.get("io");
     io.emit("badminton:match:fetched", {
       matchId: match._id,
@@ -6513,6 +6506,7 @@ export const getSingleBadmintonById = async (req, res) => {
     return res.status(500).json({ success: false, message: "Internal server error ❌" });
   }
 };
+
 
 export const getCompletedGameMatch = async (req, res) => {
   try {
@@ -6623,6 +6617,8 @@ export const getCompletedGameMatch = async (req, res) => {
 
 
 
+
+
 export const updateBadmintonMatchFlexible = async (req, res) => {
   try {
     const { matchId } = req.params;
@@ -6637,9 +6633,17 @@ export const updateBadmintonMatchFlexible = async (req, res) => {
       return res.status(404).json({ success: false, message: "Match not found ❌" });
     }
 
-    const isTeamMatch = match.teams && match.teams.length > 0;
+    const isTeamMatch = Array.isArray(match.teams) && match.teams.length > 0;
 
-    // === 1. Update General Match Fields ===
+    // Validate cancel reason
+    if (updateData.status === "cancel" && (!updateData.reason || updateData.reason.trim() === "")) {
+      return res.status(400).json({ success: false, message: "Reason is required when status is 'cancel'" });
+    }
+
+    // Store old currentSet to detect changes
+    const oldCurrentSet = match.currentSet;
+
+    // Update basic fields
     const updatableFields = [
       "status",
       "currentStatus",
@@ -6651,203 +6655,508 @@ export const updateBadmintonMatchFlexible = async (req, res) => {
       "allowDeuce",
       "maxDeucePoint",
       "finalScore",
-      "winner"
+      "winner",
+      "reason"
     ];
-
     updatableFields.forEach(field => {
       if (updateData[field] !== undefined) {
         match[field] = updateData[field];
       }
     });
 
-    // === 1.1 Auto-set winner of previous set ===
-    if (updateData.currentSet && Number.isInteger(updateData.currentSet)) {
-      const newSet = updateData.currentSet;
-      const prevSetIndex = newSet - 2;
-
-      if (prevSetIndex >= 0 && match.sets && match.sets[prevSetIndex]) {
-        const prevSet = match.sets[prevSetIndex];
-        const score = prevSet.score || {};
-
-        if (isTeamMatch) {
-          const teamAScore = score.teamA || 0;
-          const teamBScore = score.teamB || 0;
-
-          prevSet.winner = teamAScore > teamBScore ? "teamA" : teamBScore > teamAScore ? "teamB" : null;
-        } else {
-          const playerAScore = score.playerA || 0;
-          const playerBScore = score.playerB || 0;
-
-          prevSet.winner = playerAScore > playerBScore ? "playerA" : playerBScore > playerAScore ? "playerB" : null;
-        }
-      }
-
-      // === 1.2 Handle Current Set Winner ===
-      const currentSetIndex = (newSet || 1) - 1;
-      if (match.sets[currentSetIndex]) {
-        const currentSet = match.sets[currentSetIndex];
-        const currentScore = currentSet.score || {};
-
-        if (isTeamMatch) {
-          const teamAScore = currentScore.teamA || 0;
-          const teamBScore = currentScore.teamB || 0;
-
-          // If winner is not set yet, set it based on the current score
-          if (currentSet.winner === null) {
-            currentSet.winner = teamAScore > teamBScore ? "teamA" : teamBScore > teamAScore ? "teamB" : null;
-          }
-        } else {
-          const playerAScore = currentScore.playerA || 0;
-          const playerBScore = currentScore.playerB || 0;
-
-          if (currentSet.winner === null) {
-            currentSet.winner = playerAScore > playerBScore ? "playerA" : playerBScore > playerAScore ? "playerB" : null;
-          }
-        }
-      }
+    // Ensure sets array initialized with default sets based on totalSets
+    match.sets = match.sets || [];
+    const totalSets = match.totalSets || 3;
+    
+    // Initialize default sets if not present
+    while (match.sets.length < totalSets) {
+      match.sets.push({
+        setNumber: match.sets.length + 1,
+        score: { teamA: 0, teamB: 0 },
+        winner: null,
+      });
     }
 
-    // === 2. Update Player or Team Points ===
-    if (updateData.points !== undefined && updateData.action) {
-      const { points, action } = updateData;
+    // Update points for a team
+    if (updateData.points !== undefined && updateData.action && updateData.teamId) {
+      const { points, action, teamId } = updateData;
       const pointChange = action === "inc" ? points : -points;
+
+      // Update scoreCard
       match.scoreCard = match.scoreCard || [];
+      let teamScore = match.scoreCard.find(sc => sc.teamId.toString() === teamId.toString());
+      if (!teamScore) {
+        teamScore = { 
+          teamId, 
+          teamGoals: 0, 
+          players: [] 
+        };
+        match.scoreCard.push(teamScore);
+      }
+      teamScore.teamGoals += pointChange;
+      if (teamScore.teamGoals < 0) teamScore.teamGoals = 0;
 
-      if (isTeamMatch) {
-        const { teamId, playerId } = updateData;
-        if (!teamId || !playerId) {
-          return res.status(400).json({ success: false, message: "Team ID and Player ID are required" });
-        }
+      // Handle sets array for current set scores
+      const currentSetIndex = (match.currentSet || 1) - 1;
+      
+      // Ensure sets array has current set
+      while (match.sets.length <= currentSetIndex) {
+        match.sets.push({
+          setNumber: match.sets.length + 1,
+          score: { teamA: 0, teamB: 0 },
+          winner: null,
+        });
+      }
 
-        // TEAM-based match logic
-        let teamScore = match.scoreCard.find(sc => sc.teamId.toString() === teamId);
-        if (!teamScore) {
-          teamScore = { teamId, teamGoals: 0, players: [] };
-          match.scoreCard.push(teamScore);
-        }
+      // Ensure score object exists
+      if (!match.sets[currentSetIndex].score) {
+        match.sets[currentSetIndex].score = { teamA: 0, teamB: 0 };
+      }
 
-        teamScore.teamGoals += pointChange;
-        if (teamScore.teamGoals < 0) teamScore.teamGoals = 0;
+      // Find team index and update score directly
+      const teamIndex = match.teams.findIndex(t => t.teamId.toString() === teamId.toString());
+      if (teamIndex === 0) {
+        match.sets[currentSetIndex].score.teamA += pointChange;
+        if (match.sets[currentSetIndex].score.teamA < 0)
+          match.sets[currentSetIndex].score.teamA = 0;
+      } else if (teamIndex === 1) {
+        match.sets[currentSetIndex].score.teamB += pointChange;
+        if (match.sets[currentSetIndex].score.teamB < 0)
+          match.sets[currentSetIndex].score.teamB = 0;
+      }
+    }
 
-        let playerScore = teamScore.players.find(p => p.playerId.toString() === playerId);
-        if (!playerScore) {
-          playerScore = {
-            playerId,
-            goals: 0,
-            points: 0,
-            warningCards: { yellow: 0, red: 0 },
-            isOut: false
-          };
-          teamScore.players.push(playerScore);
-        }
+    // Update points for a player
+    if (updateData.points !== undefined && updateData.action && updateData.playerId && !isTeamMatch) {
+      const { points, action, playerId } = updateData;
+      const pointChange = action === "inc" ? points : -points;
 
-        playerScore.points += pointChange;
-        if (playerScore.points < 0) playerScore.points = 0;
+      const currentSetIndex = (match.currentSet || 1) - 1;
+      
+      // Ensure sets array has current set
+      while (match.sets.length <= currentSetIndex) {
+        match.sets.push({
+          setNumber: match.sets.length + 1,
+          score: { teamA: 0, teamB: 0 },
+          winner: null,
+        });
+      }
 
-        // === 3. Update Current Set Score (TEAM-based) ===
-        const currentSetIndex = (match.currentSet || 1) - 1;
-        match.sets = match.sets || [];
-        while (match.sets.length <= currentSetIndex) {
-          match.sets.push({ setNumber: match.sets.length + 1, score: { teamA: 0, teamB: 0 }, winner: null });
-        }
+      // Ensure score object exists
+      if (!match.sets[currentSetIndex].score) {
+        match.sets[currentSetIndex].score = { teamA: 0, teamB: 0 };
+      }
 
-        const teamIndex = match.teams.findIndex(t => t.teamId.toString() === teamId);
-        if (teamIndex === 0) {
+      // For singles, treat teamA as playerA and teamB as playerB
+      if (match.players && match.players.length === 2) {
+        if (match.players[0].toString() === playerId.toString()) {
           match.sets[currentSetIndex].score.teamA += pointChange;
-          if (match.sets[currentSetIndex].score.teamA < 0) match.sets[currentSetIndex].score.teamA = 0;
-        } else if (teamIndex === 1) {
+          if (match.sets[currentSetIndex].score.teamA < 0) 
+            match.sets[currentSetIndex].score.teamA = 0;
+        } else if (match.players[1].toString() === playerId.toString()) {
           match.sets[currentSetIndex].score.teamB += pointChange;
-          if (match.sets[currentSetIndex].score.teamB < 0) match.sets[currentSetIndex].score.teamB = 0;
-        }
-
-      } else {
-        // PLAYER-based match logic
-        const { playerId } = updateData;
-        if (!playerId) {
-          return res.status(400).json({ success: false, message: "Player ID is required" });
-        }
-
-        let playerScore = match.scoreCard?.[0]?.players?.find(p => p.playerId.toString() === playerId);
-
-        if (!match.scoreCard[0]) {
-          match.scoreCard[0] = { teamId: null, players: [] };
-        }
-
-        if (!playerScore) {
-          playerScore = {
-            playerId,
-            goals: 0,
-            points: 0,
-            warningCards: { yellow: 0, red: 0 },
-            isOut: false
-          };
-          match.scoreCard[0].players.push(playerScore);
-        }
-
-        playerScore.points += pointChange;
-        if (playerScore.points < 0) playerScore.points = 0;
-
-        // === 3. Update Current Set Score (PLAYER-based) ===
-        const currentSetIndex = (match.currentSet || 1) - 1;
-        match.sets = match.sets || [];
-        while (match.sets.length <= currentSetIndex) {
-          match.sets.push({
-            setNumber: match.sets.length + 1,
-            score: { playerA: 0, playerB: 0 },
-            winner: null
-          });
-        }
-
-        const playerIndex = match.players.findIndex(p => p.toString() === playerId.toString());
-
-        if (playerIndex === 0) {
-          match.sets[currentSetIndex].score.playerA += pointChange;
-          if (match.sets[currentSetIndex].score.playerA < 0) match.sets[currentSetIndex].score.playerA = 0;
-        } else if (playerIndex === 1) {
-          match.sets[currentSetIndex].score.playerB += pointChange;
-          if (match.sets[currentSetIndex].score.playerB < 0) match.sets[currentSetIndex].score.playerB = 0;
+          if (match.sets[currentSetIndex].score.teamB < 0) 
+            match.sets[currentSetIndex].score.teamB = 0;
         }
       }
     }
 
-    // === 4. If match is being finished and it’s the last set, calculate finalScore and winner ===
-    if (match.status === "finished" && match.currentSet === match.totalSets && Array.isArray(match.sets)) {
-      let scoreA = 0;
-      let scoreB = 0;
+    // AUTO SET WINNERS LOGIC - IMPROVED
+    const updateSetWinners = () => {
+      if (!match.currentSet || !Number.isInteger(match.currentSet)) return;
+
+      const currentSetIndex = match.currentSet - 1;
+      
+      // Calculate winner for ALL completed sets (sets before current set)
+      for (let i = 0; i < match.sets.length; i++) {
+        const set = match.sets[i];
+        const score = set.score || { teamA: 0, teamB: 0 };
+        
+        // Only calculate winner for sets that are completed (before current set)
+        if (i < currentSetIndex) {
+          if (isTeamMatch) {
+            const teamAScore = score.teamA || 0;
+            const teamBScore = score.teamB || 0;
+            
+            if (teamAScore > teamBScore) {
+              set.winner = "teamA";
+            } else if (teamBScore > teamAScore) {
+              set.winner = "teamB";
+            } else {
+              set.winner = null; // Draw
+            }
+          } else {
+            const playerAScore = score.teamA || 0;
+            const playerBScore = score.teamB || 0;
+            
+            if (playerAScore > playerBScore) {
+              set.winner = "playerA";
+            } else if (playerBScore > playerAScore) {
+              set.winner = "playerB";
+            } else {
+              set.winner = null; // Draw
+            }
+          }
+        }
+        
+        // For current set, only set winner if status is finished
+        if (i === currentSetIndex && match.status === "finished") {
+          if (isTeamMatch) {
+            const teamAScore = score.teamA || 0;
+            const teamBScore = score.teamB || 0;
+            
+            if (teamAScore > teamBScore) {
+              set.winner = "teamA";
+            } else if (teamBScore > teamAScore) {
+              set.winner = "teamB";
+            } else {
+              set.winner = null;
+            }
+          } else {
+            const playerAScore = score.teamA || 0;
+            const playerBScore = score.teamB || 0;
+            
+            if (playerAScore > playerBScore) {
+              set.winner = "playerA";
+            } else if (playerBScore > playerAScore) {
+              set.winner = "playerB";
+            } else {
+              set.winner = null;
+            }
+          }
+        }
+      }
+    };
+
+    // If currentSet changed, update previous set winners
+    if (oldCurrentSet !== match.currentSet) {
+      updateSetWinners();
+    }
+
+    // If match finished, calculate final winner automatically
+    if (match.status === "finished") {
+      // First, ensure all set winners are calculated
+      updateSetWinners();
+      
+      // Calculate final scores (TOTAL POINTS across all sets)
+      let totalPointsA = 0;
+      let totalPointsB = 0;
+      let setsWonA = 0;
+      let setsWonB = 0;
 
       match.sets.forEach(set => {
-        if (isTeamMatch) {
-          if (set.winner === "teamA") scoreA += 1;
-          else if (set.winner === "teamB") scoreB += 1;
-        } else {
-          if (set.winner === "playerA") scoreA += 1;
-          else if (set.winner === "playerB") scoreB += 1;
+        const score = set.score || { teamA: 0, teamB: 0 };
+        totalPointsA += score.teamA || 0;
+        totalPointsB += score.teamB || 0;
+        
+        if (set.winner === "teamA" || set.winner === "playerA") {
+          setsWonA++;
+        } else if (set.winner === "teamB" || set.winner === "playerB") {
+          setsWonB++;
         }
       });
 
-      // Final scores
+      // Update finalScore with TOTAL POINTS (not sets count)
       match.finalScore = {
-        teamA: scoreA,
-        teamB: scoreB
+        teamA: totalPointsA,  // Total points scored by team A
+        teamB: totalPointsB,  // Total points scored by team B
       };
 
-      // Determine winner based on the final score
-      if (scoreA > scoreB) {
-        match.winner = isTeamMatch ? match.teams[0]?.teamId : match.players[0];
-      } else if (scoreB > scoreA) {
-        match.winner = isTeamMatch ? match.teams[1]?.teamId : match.players[1];
+      // Determine winner based on SETS WON (not total points)
+      if (setsWonA > setsWonB) {
+        match.winner = isTeamMatch ? match.teams[0].teamId : match.players[0];
+      } else if (setsWonB > setsWonA) {
+        match.winner = isTeamMatch ? match.teams[1].teamId : match.players[1];
       } else {
-        match.winner = null; // If it's a draw
+        match.winner = null; // Draw
       }
     }
 
-    // === 5. Save Match ===
     await match.save();
 
-    // === 6. Populate & Emit ===
+    // Populate related fields
     const updatedMatch = await GameMatch.findById(matchId)
-      .populate("createdBy", "name email")
-      .populate("categoryId", "name")
+      .populate({
+        path: "createdBy",
+        select: "name email",
+      })
+      .populate({
+        path: "categoryId",
+        select: "name",
+      })
+      .populate({
+        path: "teams.teamId",
+        model: "GameTeam",
+        populate: {
+          path: "players",
+          model: "User",
+          select: "name avatar email",
+        },
+      })
+      .populate({
+        path: "winner",
+        select: "teamName"
+      });
+
+    if (!updatedMatch) {
+      return res.status(404).json({ success: false, message: "Match not found after update ❌" });
+    }
+
+    // Format teams for response
+    const formattedTeams = updatedMatch.teams.map(team => ({
+      teamId: team.teamId._id,
+      teamName: team.teamId.teamName,
+      players: team.teamId.players.map(player => ({
+        playerId: player._id,
+        playerName: player.name,
+        avatar: player.avatar || "default-avatar.jpg",
+      })),
+    }));
+
+    // Calculate total points for final score
+    let totalPointsTeamA = 0;
+    let totalPointsTeamB = 0;
+    
+    updatedMatch.sets.forEach(set => {
+      const score = set.score || { teamA: 0, teamB: 0 };
+      totalPointsTeamA += score.teamA || 0;
+      totalPointsTeamB += score.teamB || 0;
+    });
+
+    // Format sets for response
+    const formattedScoreCard = updatedMatch.sets.map(set => {
+      const score = set.score || { teamA: 0, teamB: 0 };
+      
+      return {
+        setNumber: set.setNumber,
+        score: {
+          teamA: {
+            name: formattedTeams[0]?.teamName || "Team A",
+            score: score.teamA || 0,
+            teamId: formattedTeams[0]?.teamId,
+          },
+          teamB: {
+            name: formattedTeams[1]?.teamName || "Team B",
+            score: score.teamB || 0,
+            teamId: formattedTeams[1]?.teamId,
+          },
+        },
+        winner: set.winner,
+      };
+    });
+
+    // Construct finalScore with TOTAL POINTS
+    const finalScore = {
+      teamA: {
+        name: formattedTeams[0]?.teamName || "Team A",
+        score: totalPointsTeamA,  // Total points across all sets
+        teamId: formattedTeams[0]?.teamId,
+      },
+      teamB: {
+        name: formattedTeams[1]?.teamName || "Team B",
+        score: totalPointsTeamB,  // Total points across all sets
+        teamId: formattedTeams[1]?.teamId,
+      },
+    };
+
+    // Format scoreCard for response - SIMPLIFIED (no goals/points/warnings)
+    const formattedScoreCardWithGoals = updatedMatch.scoreCard.map(score => {
+      const team = formattedTeams.find(t => t.teamId.toString() === score.teamId.toString());
+      return {
+        teamId: score.teamId,
+        teamName: team?.teamName || "Unknown Team",
+        teamPoints: score.teamGoals || 0, // teamGoals ko teamPoints kardo
+        players: (team?.players || []).map(player => ({
+          playerId: player.playerId,
+          playerName: player.playerName,
+          avatar: player.avatar || "default-avatar.jpg"
+          // Goals, points, warningCards, isOut REMOVED - simple player info
+        }))
+      };
+    });
+
+    // Create scoring template
+    const scoringTemplate = {
+      setsToWin: Math.ceil((match.totalSets || 3) / 2),
+      pointsToWinSet: match.pointsPerSet || 21,
+      winBy: match.winBy || 2,
+      maxPoints: match.maxDeucePoint || 30,
+      hasGames: false
+    };
+
+    // Format winner as object with teamName and teamId
+    let formattedWinner = null;
+    if (updatedMatch.winner) {
+      if (isTeamMatch) {
+        // Find the winning team from formattedTeams
+        const winningTeam = formattedTeams.find(team => 
+          team.teamId.toString() === updatedMatch.winner._id.toString()
+        );
+        if (winningTeam) {
+          formattedWinner = {
+            teamId: winningTeam.teamId,
+            teamName: winningTeam.teamName
+          };
+        }
+      } else {
+        // For singles match, winner is a player
+        formattedWinner = {
+          playerId: updatedMatch.winner._id,
+          playerName: "Player Name" // You can populate this if you have player data
+        };
+      }
+    }
+
+    // Emit socket update
+    const io = req.app.get("io");
+    io.emit("badminton:match:updated", updatedMatch);
+
+    // Send complete response
+    return res.status(200).json({
+      success: true,
+      message: "Badminton match updated successfully ✅",
+      match: {
+        _id: updatedMatch._id,
+        name: updatedMatch.name,
+        categoryId: updatedMatch.categoryId,
+        createdBy: updatedMatch.createdBy,
+        status: updatedMatch.status,
+        currentStatus: updatedMatch.currentStatus,
+        startTime: updatedMatch.startTime,
+        totalSets: updatedMatch.totalSets,
+        pointsPerSet: updatedMatch.pointsPerSet,
+        winBy: updatedMatch.winBy,
+        allowDeuce: updatedMatch.allowDeuce,
+        maxDeucePoint: updatedMatch.maxDeucePoint,
+        currentSet: updatedMatch.currentSet,
+        sets: formattedScoreCard,
+        finalScore,
+        scoreCard: formattedScoreCardWithGoals, // Simplified scoreCard
+        createdAt: updatedMatch.createdAt,
+        updatedAt: updatedMatch.updatedAt,
+        teams: formattedTeams,
+        isTeamMatch: updatedMatch.isTeamMatch,
+        scoringTemplate: scoringTemplate,
+        winner: formattedWinner,  // Formatted winner object
+      },
+    });
+  } catch (error) {
+    console.error("Error updating badminton match:", error);
+    return res.status(500).json({ success: false, message: "Internal server error ❌" });
+  }
+};
+
+
+
+export const startVolleyballMatch = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+    const {
+      startTime,
+      totalSets,
+      pointsPerSet,
+      winBy,
+      allowDeuce,
+      maxDeucePoint,
+      currentSet
+    } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(matchId)) {
+      return res.status(400).json({ success: false, message: "Invalid match ID ❌" });
+    }
+
+    const match = await GameMatch.findById(matchId).populate('teams.teamId');
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found ❌" });
+    }
+
+    match.status = 'live';
+    match.currentStatus = 'in-progress';
+    match.startedAt = new Date();
+    match.startTime = startTime || new Date();
+    match.totalSets = totalSets || 3;
+    match.pointsPerSet = pointsPerSet || 25;
+    match.winBy = winBy || 2;
+    match.allowDeuce = allowDeuce ?? true;
+    match.maxDeucePoint = maxDeucePoint || 30;
+    match.currentSet = currentSet || 1;
+
+    // Initialize scoreCard for volleyball
+    match.scoreCard = match.teams.map(({ teamId }) => ({
+      teamId: teamId._id,
+      teamName: teamId.teamName,
+      teamGoals: 0, // teamPoints ke liye
+      players: teamId.players.map(player => ({
+        playerId: player._id,
+        playerName: player.name,
+        points: 0,
+        warningCards: {
+          yellow: 0,
+          red: 0,
+        },
+        isOut: false,
+      }))
+    }));
+
+    // Initialize sets array for volleyball
+    match.sets = Array.from({ length: match.totalSets }, (_, i) => ({
+      setNumber: i + 1,
+      score: { teamA: 0, teamB: 0 },
+      winner: null,
+    }));
+
+    await match.save();
+
+    return res.status(200).json({
+      success: true,
+      message: "Volleyball match started successfully ✅",
+      match: {
+        _id: match._id,
+        name: match.name,
+        status: match.status,
+        currentStatus: match.currentStatus,
+        startedAt: match.startedAt,
+        startTime: match.startTime,
+        totalSets: match.totalSets,
+        pointsPerSet: match.pointsPerSet,
+        winBy: match.winBy,
+        allowDeuce: match.allowDeuce,
+        maxDeucePoint: match.maxDeucePoint,
+        currentSet: match.currentSet,
+        scoreCard: match.scoreCard,
+        sets: match.sets,
+      }
+    });
+
+  } catch (error) {
+    console.error('Error starting volleyball match:', error);
+    return res.status(500).json({ success: false, message: "Internal server error ❌" });
+  }
+};
+
+
+
+export const getSingleVolleyballById = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+
+    if (!matchId) {
+      return res.status(400).json({ success: false, message: "Match ID is required" });
+    }
+
+    if (!mongoose.isValidObjectId(matchId)) {
+      return res.status(400).json({ success: false, message: "Invalid match ID format" });
+    }
+
+    const match = await GameMatch.findById(matchId)
+      .populate({
+        path: "createdBy",
+        select: "name email",
+      })
+      .populate({
+        path: "categoryId",
+        select: "name",
+      })
       .populate({
         path: "teams.teamId",
         model: "GameTeam",
@@ -6856,19 +7165,670 @@ export const updateBadmintonMatchFlexible = async (req, res) => {
           model: "User",
           select: "name email avatar",
         },
-      })
-      .populate("winner", "teamName");
+      });
+
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found ❌" });
+    }
+
+    const scoreCard = match.scoreCard || [];
+    const isTeamMatch = match.teams && match.teams.length > 0;
+
+    let teams = [];
+    let detailedScoreCard = [];
+
+    if (isTeamMatch) {
+      // TEAM-BASED LOGIC without points/goals/warnings
+      teams = match.teams.map((team) => {
+        return {
+          teamId: team.teamId?._id,
+          teamName: team.teamId?.teamName || "Unknown Team",
+          players:
+            team.teamId?.players.map((p) => ({
+              playerId: p._id,
+              playerName: p.name || "Unknown Player",
+              avatar: p.avatar || "default-avatar.jpg",
+            })) || [],
+        };
+      });
+
+      // SIMPLIFIED SCORE CARD - only teamPoints and basic player info
+      detailedScoreCard = match.teams.map((team) => {
+        const teamScore = scoreCard.find(sc => sc.teamId?.toString() === team.teamId?._id?.toString());
+        
+        return {
+          teamId: team.teamId?._id,
+          teamName: team.teamId?.teamName || "Unknown Team",
+          teamPoints: teamScore?.teamGoals || 0,
+          players: (team.teamId?.players || []).map((p) => ({
+            playerId: p._id,
+            playerName: p.name || "Unknown Player",
+            avatar: p.avatar || "default-avatar.jpg",
+          })),
+        };
+      });
+
+    } else {
+      // PLAYER-BASED MATCH LOGIC without points/goals/warnings
+      const players = await User.find({
+        name: { $in: match.players },
+      }).select("_id name avatar email");
+
+      teams = players.map((player) => ({
+        playerId: player._id,
+        playerName: player.name,
+        avatar: player.avatar || "default-avatar.jpg",
+        email: player.email,
+      }));
+
+      detailedScoreCard = [{
+        teamId: null,
+        players: players.map(player => ({
+          playerId: player._id,
+          playerName: player.name,
+        })),
+      }];
+    }
+
+    // Sets & finalScore logic
+    const totalSets = match.totalSets || 3;
+    const existingSets = match.sets || [];
+
+    const sets = Array.from({ length: totalSets }, (_, i) => {
+      const setIndex = i + 1;
+      const existingSet = existingSets.find((s) => s.setNumber === setIndex);
+
+      if (isTeamMatch && teams.length >= 2) {
+        const teamA = teams[0];
+        const teamB = teams[1];
+
+        if (existingSet) {
+          return {
+            ...existingSet.toObject(),
+            score: {
+              teamA: {
+                name: teamA.teamName,
+                score: existingSet.score.teamA || 0,
+                teamId: teamA.teamId,
+              },
+              teamB: {
+                name: teamB.teamName,
+                score: existingSet.score.teamB || 0,
+                teamId: teamB.teamId,
+              },
+            },
+            winner:
+              existingSet.winner === "teamA"
+                ? teamA.teamName
+                : existingSet.winner === "teamB"
+                ? teamB.teamName
+                : null,
+            winnerId:
+              existingSet.winner === "teamA"
+                ? teamA.teamId
+                : existingSet.winner === "teamB"
+                ? teamB.teamId
+                : null,
+          };
+        } else {
+          return {
+            setNumber: setIndex,
+            score: {
+              teamA: {
+                name: teamA.teamName,
+                score: 0,
+                teamId: teamA.teamId,
+              },
+              teamB: {
+                name: teamB.teamName,
+                score: 0,
+                teamId: teamB.teamId,
+              },
+            },
+            winner: null,
+            winnerId: null,
+          };
+        }
+      } else {
+        return (
+          existingSet || {
+            setNumber: setIndex,
+            score: { playerA: 0, playerB: 0 },
+            winner: null,
+          }
+        );
+      }
+    });
+
+    // Final score handling
+    let finalScore = match.finalScore;
+    if (isTeamMatch && teams.length >= 2) {
+      const teamA = teams[0];
+      const teamB = teams[1];
+
+      if (match.finalScore) {
+        finalScore = {
+          teamA: {
+            name: teamA.teamName,
+            score: match.finalScore.teamA || 0,
+            teamId: teamA.teamId,
+          },
+          teamB: {
+            name: teamB.teamName,
+            score: match.finalScore.teamB || 0,
+            teamId: teamB.teamId,
+          },
+        };
+      } else {
+        finalScore = {
+          teamA: {
+            name: teamA.teamName,
+            score: 0,
+            teamId: teamA.teamId,
+          },
+          teamB: {
+            name: teamB.teamName,
+            score: 0,
+            teamId: teamB.teamId,
+          },
+        };
+      }
+    } else if (!isTeamMatch) {
+      finalScore = match.finalScore || { playerA: 0, playerB: 0 };
+    }
+
+    // Winner field
+    let matchWinner = match.winner;
+    if (isTeamMatch && match.status === "finished" && matchWinner && teams.length >= 2) {
+      const winningTeam = teams.find(
+        (team) => team.teamId.toString() === matchWinner.toString()
+      );
+      if (winningTeam) {
+        matchWinner = {
+          teamId: winningTeam.teamId,
+          teamName: winningTeam.teamName,
+          players: winningTeam.players,
+        };
+      }
+    }
+
+    const scoringTemplate = match.scoringTemplate || {
+      setsToWin: match.totalSets ? Math.ceil(match.totalSets / 2) : 2,
+      pointsToWinSet: match.pointsPerSet || 25,
+      winBy: match.winBy || 2,
+      maxPoints: match.maxDeucePoint || 30,
+      hasGames: false,
+    };
+
+    const response = {
+      _id: match._id,
+      name: match.name,
+      categoryId: match.categoryId,
+      createdBy: match.createdBy,
+      status: match.status,
+      currentStatus: match.currentStatus,
+      startTime: match.startTime,
+      totalSets: match.totalSets,
+      pointsPerSet: match.pointsPerSet,
+      winBy: match.winBy,
+      allowDeuce: match.allowDeuce,
+      maxDeucePoint: match.maxDeucePoint,
+      currentSet: match.currentSet,
+      sets,
+      finalScore,
+      winner: matchWinner,
+      createdAt: match.createdAt,
+      updatedAt: match.updatedAt,
+      teams,
+      isTeamMatch,
+      scoreCard: detailedScoreCard,
+      scoringTemplate,
+    };
 
     const io = req.app.get("io");
-    io.emit("badminton:match:updated", updatedMatch);
+    io.emit("volleyball:match:fetched", {
+      matchId: match._id,
+      message: "Match data fetched",
+      match: response,
+    });
 
     return res.status(200).json({
       success: true,
-      message: "Badminton match updated successfully ✅",
-      match: updatedMatch,
+      message: "Volleyball match fetched successfully ✅",
+      match: response,
     });
   } catch (error) {
-    console.error("Error updating badminton match:", error);
+    console.error("Error fetching volleyball match:", error);
+    return res.status(500).json({ success: false, message: "Internal server error ❌" });
+  }
+};
+
+
+
+export const updateVolleyballMatchFlexible = async (req, res) => {
+  try {
+    const { matchId } = req.params;
+    const updateData = req.body;
+
+    if (!matchId || !mongoose.isValidObjectId(matchId)) {
+      return res.status(400).json({ success: false, message: "Invalid match ID" });
+    }
+
+    const match = await GameMatch.findById(matchId);
+    if (!match) {
+      return res.status(404).json({ success: false, message: "Match not found ❌" });
+    }
+
+    const isTeamMatch = Array.isArray(match.teams) && match.teams.length > 0;
+
+    // Validate cancel reason
+    if (updateData.status === "cancel" && (!updateData.reason || updateData.reason.trim() === "")) {
+      return res.status(400).json({ success: false, message: "Reason is required when status is 'cancel'" });
+    }
+
+    // Store old currentSet to detect changes
+    const oldCurrentSet = match.currentSet;
+
+    // Update basic fields
+    const updatableFields = [
+      "status",
+      "currentStatus",
+      "currentSet",
+      "startTime",
+      "totalSets",
+      "pointsPerSet",
+      "winBy",
+      "allowDeuce",
+      "maxDeucePoint",
+      "finalScore",
+      "winner",
+      "reason"
+    ];
+    updatableFields.forEach(field => {
+      if (updateData[field] !== undefined) {
+        match[field] = updateData[field];
+      }
+    });
+
+    // Ensure sets array initialized with default sets based on totalSets
+    match.sets = match.sets || [];
+    const totalSets = match.totalSets || 3;
+    
+    // Initialize default sets if not present
+    while (match.sets.length < totalSets) {
+      match.sets.push({
+        setNumber: match.sets.length + 1,
+        score: { teamA: 0, teamB: 0 },
+        winner: null,
+      });
+    }
+
+    // Update points for a team
+    if (updateData.points !== undefined && updateData.action && updateData.teamId) {
+      const { points, action, teamId } = updateData;
+      const pointChange = action === "inc" ? points : -points;
+
+      // Update scoreCard
+      match.scoreCard = match.scoreCard || [];
+      let teamScore = match.scoreCard.find(sc => sc.teamId.toString() === teamId.toString());
+      if (!teamScore) {
+        teamScore = { 
+          teamId, 
+          teamGoals: 0, 
+          players: [] 
+        };
+        match.scoreCard.push(teamScore);
+      }
+      teamScore.teamGoals += pointChange;
+      if (teamScore.teamGoals < 0) teamScore.teamGoals = 0;
+
+      // Handle sets array for current set scores
+      const currentSetIndex = (match.currentSet || 1) - 1;
+      
+      // Ensure sets array has current set
+      while (match.sets.length <= currentSetIndex) {
+        match.sets.push({
+          setNumber: match.sets.length + 1,
+          score: { teamA: 0, teamB: 0 },
+          winner: null,
+        });
+      }
+
+      // Ensure score object exists
+      if (!match.sets[currentSetIndex].score) {
+        match.sets[currentSetIndex].score = { teamA: 0, teamB: 0 };
+      }
+
+      // Find team index and update score directly
+      const teamIndex = match.teams.findIndex(t => t.teamId.toString() === teamId.toString());
+      if (teamIndex === 0) {
+        match.sets[currentSetIndex].score.teamA += pointChange;
+        if (match.sets[currentSetIndex].score.teamA < 0)
+          match.sets[currentSetIndex].score.teamA = 0;
+      } else if (teamIndex === 1) {
+        match.sets[currentSetIndex].score.teamB += pointChange;
+        if (match.sets[currentSetIndex].score.teamB < 0)
+          match.sets[currentSetIndex].score.teamB = 0;
+      }
+    }
+
+    // Update points for a player
+    if (updateData.points !== undefined && updateData.action && updateData.playerId && !isTeamMatch) {
+      const { points, action, playerId } = updateData;
+      const pointChange = action === "inc" ? points : -points;
+
+      const currentSetIndex = (match.currentSet || 1) - 1;
+      
+      // Ensure sets array has current set
+      while (match.sets.length <= currentSetIndex) {
+        match.sets.push({
+          setNumber: match.sets.length + 1,
+          score: { teamA: 0, teamB: 0 },
+          winner: null,
+        });
+      }
+
+      // Ensure score object exists
+      if (!match.sets[currentSetIndex].score) {
+        match.sets[currentSetIndex].score = { teamA: 0, teamB: 0 };
+      }
+
+      // For singles, treat teamA as playerA and teamB as playerB
+      if (match.players && match.players.length === 2) {
+        if (match.players[0].toString() === playerId.toString()) {
+          match.sets[currentSetIndex].score.teamA += pointChange;
+          if (match.sets[currentSetIndex].score.teamA < 0) 
+            match.sets[currentSetIndex].score.teamA = 0;
+        } else if (match.players[1].toString() === playerId.toString()) {
+          match.sets[currentSetIndex].score.teamB += pointChange;
+          if (match.sets[currentSetIndex].score.teamB < 0) 
+            match.sets[currentSetIndex].score.teamB = 0;
+        }
+      }
+    }
+
+    // AUTO SET WINNERS LOGIC - IMPROVED
+    const updateSetWinners = () => {
+      if (!match.currentSet || !Number.isInteger(match.currentSet)) return;
+
+      const currentSetIndex = match.currentSet - 1;
+      
+      // Calculate winner for ALL completed sets (sets before current set)
+      for (let i = 0; i < match.sets.length; i++) {
+        const set = match.sets[i];
+        const score = set.score || { teamA: 0, teamB: 0 };
+        
+        // Only calculate winner for sets that are completed (before current set)
+        if (i < currentSetIndex) {
+          if (isTeamMatch) {
+            const teamAScore = score.teamA || 0;
+            const teamBScore = score.teamB || 0;
+            
+            if (teamAScore > teamBScore) {
+              set.winner = "teamA";
+            } else if (teamBScore > teamAScore) {
+              set.winner = "teamB";
+            } else {
+              set.winner = null; // Draw
+            }
+          } else {
+            const playerAScore = score.teamA || 0;
+            const playerBScore = score.teamB || 0;
+            
+            if (playerAScore > playerBScore) {
+              set.winner = "playerA";
+            } else if (playerBScore > playerAScore) {
+              set.winner = "playerB";
+            } else {
+              set.winner = null; // Draw
+            }
+          }
+        }
+        
+        // For current set, only set winner if status is finished
+        if (i === currentSetIndex && match.status === "finished") {
+          if (isTeamMatch) {
+            const teamAScore = score.teamA || 0;
+            const teamBScore = score.teamB || 0;
+            
+            if (teamAScore > teamBScore) {
+              set.winner = "teamA";
+            } else if (teamBScore > teamAScore) {
+              set.winner = "teamB";
+            } else {
+              set.winner = null;
+            }
+          } else {
+            const playerAScore = score.teamA || 0;
+            const playerBScore = score.teamB || 0;
+            
+            if (playerAScore > playerBScore) {
+              set.winner = "playerA";
+            } else if (playerBScore > playerAScore) {
+              set.winner = "playerB";
+            } else {
+              set.winner = null;
+            }
+          }
+        }
+      }
+    };
+
+    // If currentSet changed, update previous set winners
+    if (oldCurrentSet !== match.currentSet) {
+      updateSetWinners();
+    }
+
+    // If match finished, calculate final winner automatically
+    if (match.status === "finished") {
+      // First, ensure all set winners are calculated
+      updateSetWinners();
+      
+      // Calculate final scores (TOTAL POINTS across all sets)
+      let totalPointsA = 0;
+      let totalPointsB = 0;
+      let setsWonA = 0;
+      let setsWonB = 0;
+
+      match.sets.forEach(set => {
+        const score = set.score || { teamA: 0, teamB: 0 };
+        totalPointsA += score.teamA || 0;
+        totalPointsB += score.teamB || 0;
+        
+        if (set.winner === "teamA" || set.winner === "playerA") {
+          setsWonA++;
+        } else if (set.winner === "teamB" || set.winner === "playerB") {
+          setsWonB++;
+        }
+      });
+
+      // Update finalScore with TOTAL POINTS (not sets count)
+      match.finalScore = {
+        teamA: totalPointsA,
+        teamB: totalPointsB,
+      };
+
+      // Determine winner based on SETS WON (not total points)
+      if (setsWonA > setsWonB) {
+        match.winner = isTeamMatch ? match.teams[0].teamId : match.players[0];
+      } else if (setsWonB > setsWonA) {
+        match.winner = isTeamMatch ? match.teams[1].teamId : match.players[1];
+      } else {
+        match.winner = null; // Draw
+      }
+    }
+
+    await match.save();
+
+    // Populate related fields
+    const updatedMatch = await GameMatch.findById(matchId)
+      .populate({
+        path: "createdBy",
+        select: "name email",
+      })
+      .populate({
+        path: "categoryId",
+        select: "name",
+      })
+      .populate({
+        path: "teams.teamId",
+        model: "GameTeam",
+        populate: {
+          path: "players",
+          model: "User",
+          select: "name avatar email",
+        },
+      })
+      .populate({
+        path: "winner",
+        select: "teamName"
+      });
+
+    if (!updatedMatch) {
+      return res.status(404).json({ success: false, message: "Match not found after update ❌" });
+    }
+
+    // Format teams for response
+    const formattedTeams = updatedMatch.teams.map(team => ({
+      teamId: team.teamId._id,
+      teamName: team.teamId.teamName,
+      players: team.teamId.players.map(player => ({
+        playerId: player._id,
+        playerName: player.name,
+        avatar: player.avatar || "default-avatar.jpg",
+      })),
+    }));
+
+    // Calculate total points for final score
+    let totalPointsTeamA = 0;
+    let totalPointsTeamB = 0;
+    
+    updatedMatch.sets.forEach(set => {
+      const score = set.score || { teamA: 0, teamB: 0 };
+      totalPointsTeamA += score.teamA || 0;
+      totalPointsTeamB += score.teamB || 0;
+    });
+
+    // Format sets for response
+    const formattedScoreCard = updatedMatch.sets.map(set => {
+      const score = set.score || { teamA: 0, teamB: 0 };
+      
+      return {
+        setNumber: set.setNumber,
+        score: {
+          teamA: {
+            name: formattedTeams[0]?.teamName || "Team A",
+            score: score.teamA || 0,
+            teamId: formattedTeams[0]?.teamId,
+          },
+          teamB: {
+            name: formattedTeams[1]?.teamName || "Team B",
+            score: score.teamB || 0,
+            teamId: formattedTeams[1]?.teamId,
+          },
+        },
+        winner: set.winner,
+      };
+    });
+
+    // Construct finalScore with TOTAL POINTS
+    const finalScore = {
+      teamA: {
+        name: formattedTeams[0]?.teamName || "Team A",
+        score: totalPointsTeamA,
+        teamId: formattedTeams[0]?.teamId,
+      },
+      teamB: {
+        name: formattedTeams[1]?.teamName || "Team B",
+        score: totalPointsTeamB,
+        teamId: formattedTeams[1]?.teamId,
+      },
+    };
+
+    // Format scoreCard for response - SIMPLIFIED
+    const formattedScoreCardWithGoals = updatedMatch.scoreCard.map(score => {
+      const team = formattedTeams.find(t => t.teamId.toString() === score.teamId.toString());
+      return {
+        teamId: score.teamId,
+        teamName: team?.teamName || "Unknown Team",
+        teamPoints: score.teamGoals || 0,
+        players: (team?.players || []).map(player => ({
+          playerId: player.playerId,
+          playerName: player.playerName,
+          avatar: player.avatar || "default-avatar.jpg"
+        }))
+      };
+    });
+
+    // Create scoring template
+    const scoringTemplate = {
+      setsToWin: Math.ceil((match.totalSets || 3) / 2),
+      pointsToWinSet: match.pointsPerSet || 25,
+      winBy: match.winBy || 2,
+      maxPoints: match.maxDeucePoint || 30,
+      hasGames: false
+    };
+
+    // Format winner as object with teamName and teamId
+    let formattedWinner = null;
+    if (updatedMatch.winner) {
+      if (isTeamMatch) {
+        const winningTeam = formattedTeams.find(team => 
+          team.teamId.toString() === updatedMatch.winner._id.toString()
+        );
+        if (winningTeam) {
+          formattedWinner = {
+            teamId: winningTeam.teamId,
+            teamName: winningTeam.teamName
+          };
+        }
+      } else {
+        formattedWinner = {
+          playerId: updatedMatch.winner._id,
+          playerName: "Player Name"
+        };
+      }
+    }
+
+    // Emit socket update
+    const io = req.app.get("io");
+    io.emit("volleyball:match:updated", updatedMatch);
+
+    // Send complete response
+    return res.status(200).json({
+      success: true,
+      message: "Volleyball match updated successfully ✅",
+      match: {
+        _id: updatedMatch._id,
+        name: updatedMatch.name,
+        categoryId: updatedMatch.categoryId,
+        createdBy: updatedMatch.createdBy,
+        status: updatedMatch.status,
+        currentStatus: updatedMatch.currentStatus,
+        startTime: updatedMatch.startTime,
+        totalSets: updatedMatch.totalSets,
+        pointsPerSet: updatedMatch.pointsPerSet,
+        winBy: updatedMatch.winBy,
+        allowDeuce: updatedMatch.allowDeuce,
+        maxDeucePoint: updatedMatch.maxDeucePoint,
+        currentSet: updatedMatch.currentSet,
+        sets: formattedScoreCard,
+        finalScore,
+        scoreCard: formattedScoreCardWithGoals,
+        createdAt: updatedMatch.createdAt,
+        updatedAt: updatedMatch.updatedAt,
+        teams: formattedTeams,
+        isTeamMatch: updatedMatch.isTeamMatch,
+        scoringTemplate: scoringTemplate,
+        winner: formattedWinner,
+        gameMode: updatedMatch.gameMode,
+        scoringMethod: updatedMatch.scoringMethod,
+        stadium: updatedMatch.stadium,
+        refereeName: updatedMatch.refereeName
+      },
+    });
+  } catch (error) {
+    console.error("Error updating volleyball match:", error);
     return res.status(500).json({ success: false, message: "Internal server error ❌" });
   }
 };

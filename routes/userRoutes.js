@@ -43,7 +43,10 @@ import {
   startBadmintonMatch,
   getSingleBadmintonById,
   getCompletedGameMatch,
-  updateBadmintonMatchFlexible
+  updateBadmintonMatchFlexible,
+  startVolleyballMatch,
+  getSingleVolleyballById,
+  updateVolleyballMatchFlexible
 } from '../controllers/userController.js';
 import { uploadProfileImage } from '../config/multerConfig.js';
 import { getTournamentTeams } from '../controllers/turnamentController.js';
@@ -103,6 +106,10 @@ router.post('/startbadmintonmatch/:matchId', startBadmintonMatch);
 router.get('/getsinglebatmintonmatch/:matchId', getSingleBadmintonById);
 router.get('/getcompletedmatch/:matchId', getCompletedGameMatch);
 router.put('/updatebadminton/:matchId', updateBadmintonMatchFlexible);
+
+router.post('/startvolleymatch/:matchId', startVolleyballMatch);
+router.get('/getsinglevolleymatch/:matchId', getSingleVolleyballById);
+router.put('/updatevolleymatch/:matchId', updateVolleyballMatchFlexible);
 
 
 
